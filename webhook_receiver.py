@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB, decode_responses=True)
 
 def queue_job(job_type, input_path):
     if not os.path.exists(input_path):
@@ -48,7 +48,7 @@ def queue_job(job_type, input_path):
     r.hset(f"{config.HISTORY_PREFIX}{job_id}", mapping=job_payload)
     
     # Push to queue
-    r.rpush(config.QUEUE_NAME, json.dumps(job_payload))
+    r.rpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
     logger.info(f"Queued {job_type} job {job_id} for {input_path}")
     return job_id, None
 
