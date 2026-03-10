@@ -1,0 +1,10 @@
+# Allow media user to restart transcoder services without a password
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-webhook.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-router.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-worker.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-ad-stitcher.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-ad-admin.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-webui.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-scanner.service
+media ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart transcoder-win-watcher.service

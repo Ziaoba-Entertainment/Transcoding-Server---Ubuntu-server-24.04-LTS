@@ -1,0 +1,13 @@
+/var/log/transcoder/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 media media
+    sharedscripts
+    postrotate
+        systemctl restart transcoder-worker.service > /dev/null 2>&1 || true
+    endscript
+}

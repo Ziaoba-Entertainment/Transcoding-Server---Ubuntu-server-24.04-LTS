@@ -6,6 +6,7 @@ After=network.target redis.service
 Type=simple
 User=media
 Group=media
+EnvironmentFile=-/etc/transcoder/env
 WorkingDirectory=/opt/transcoder
 ExecStart=/opt/transcoder/venv/bin/python /opt/transcoder/webui.py
 Restart=on-failure

@@ -24,21 +24,30 @@ SCANNER_LOG = os.path.join(LOG_DIR, "scanner.log")
 WEBUI_LOG = os.path.join(LOG_DIR, "webui.log")
 
 # --- REDIS SETTINGS ---
-REDIS_HOST = '127.0.0.1'
-REDIS_PORT = 6379
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', '')
-REDIS_DB = 0
-REDIS_DB_ADS = 1
-TRANSCODE_QUEUE = 'transcode_queue'
-LOCAL_QUEUE = 'local_transcode_queue'
-WINDOWS_QUEUE = 'windows_transcode_queue'
-QUEUE_NAME = TRANSCODE_QUEUE
+REDIS_HOST = os.environ.get("REDIS_HOST", "192.168.0.103")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "TranscoderRedis2024!")
+REDIS_DB = int(os.environ.get("REDIS_DB", 0))
+REDIS_DB_ADS = int(os.environ.get("REDIS_DB_ADS", 1))
+
+# Queue names
+TRANSCODE_QUEUE = "transcode_queue"         # webhook_receiver pushes here
+LOCAL_QUEUE = "local_transcode_queue"       # transcoder_worker reads this
+WINDOWS_QUEUE = "windows_transcode_queue"   # windows worker reads this
+QUEUE_NAME = TRANSCODE_QUEUE                # Legacy alias
+
+# Worker detection
+WIN_HEARTBEAT_KEY = "worker:windows:heartbeat"
+WIN_HEARTBEAT_TTL = 60
+
+# Windows output
+WIN_OUTPUT_MOUNT = "/mnt/win_worker"
+
+# Router status key
+ROUTER_STATUS_KEY = "router:status"
+
 HISTORY_PREFIX = "job_history:"
 ACTIVE_JOB_KEY = "active_transcode_job"
-WIN_HEARTBEAT_KEY = 'worker:windows:heartbeat'
-WIN_HEARTBEAT_TTL = 60
-WIN_OUTPUT_MOUNT = '/mnt/win_worker'
-ROUTER_STATUS_KEY = 'router:status'
 AD_REGISTRY_KEY = "ad_registry"
 AD_META_PREFIX = "ad_meta:"
 AD_PLAYS_PREFIX = "ad_plays:"

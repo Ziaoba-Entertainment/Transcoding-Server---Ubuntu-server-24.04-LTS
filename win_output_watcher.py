@@ -1,94 +1,99 @@
-import json
-import logging
 import os
-import shutil
-import subprocess
 import time
-from datetime import datetime
+import json
+import shutil
+import logging
 import redis
 import config
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-WIN_OUTPUT_DIR = config.WIN_OUTPUT_MOUNT
-VOD_HLS_DIR = '/srv/vod/hls'
-VOD_ADS_DIR = '/srv/vod/ads'
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
+r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB_ADS, password=config.REDIS_PASSWORD, decode_responses=True)
 
-r = redis.Redis(
-    host=config.REDIS_HOST,
-    port=config.REDIS_PORT,
-    password=getattr(config, 'REDIS_PASSWORD', None) or None,
-    db=config.REDIS_DB,
-    decode_responses=True
-)
+class WinOutputHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        
+        # Windows worker writes a .done file when finished
+        if event.src_path.endswith('.done'):
+            self.process_done_file(event.src_path)
 
+    def process_done_file(self, done_file_path):
+        try:
+            with open(done_file_path, 'r') as f:
+                job_data = json.loads(f.read())
+            
+            job_id = job_data.get('job_id')
+            output_path = job_data.get('output_path')
+            job_type = job_data.get('type')
+            
+            logger.info(f"Windows job {job_id} finished. Processing output...")
+            
+            # Move files from Windows share to final destination
+            # (Assuming Windows worker wrote to a subfolder in WIN_OUTPUT_MOUNT)
+            win_job_dir = os.path.dirname(done_file_path)
+            
+            if job_type == 'ad':
+                dest_dir = os.path.join(config.ADS_OUTPUT_DIR, os.path.basename(win_job_dir))
+            else:
+                dest_dir = os.path.dirname(output_path)
+            
+            if not os.path.exists(dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+            
+            # Move all files except the .done file
+            for item in os.listdir(win_job_dir):
+                if item.endswith('.done'): continue
+                src = os.path.join(win_job_dir, item)
+                dst = os.path.join(dest_dir, item)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dst)
+            
+            # Update Redis
+            history_key = f"{config.HISTORY_PREFIX}{job_id}"
+            r.hset(history_key, mapping={
+                "status": "completed",
+                "end_time": datetime.now().isoformat(),
+                "progress": 100,
+                "worker": "windows"
+            })
+            
+            if job_type == 'ad':
+                r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "status", "active")
+                r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "completed_at", datetime.now().isoformat())
+            
+            logger.info(f"Successfully processed Windows output for job {job_id}")
+            
+            # Cleanup Windows share folder
+            shutil.rmtree(win_job_dir)
+            
+        except Exception as e:
+            logger.error(f"Error processing Windows output: {e}")
 
-def sanitize_segment(name):
-    return ''.join(ch if ch.isalnum() or ch in ('-', '_', '.') else '_' for ch in name).strip('_')
+def run_watcher():
+    if not os.path.exists(config.WIN_OUTPUT_MOUNT):
+        os.makedirs(config.WIN_OUTPUT_MOUNT, exist_ok=True)
+        
+    event_handler = WinOutputHandler()
+    observer = Observer()
+    observer.schedule(event_handler, config.WIN_OUTPUT_MOUNT, recursive=True)
+    observer.start()
+    
+    logger.info(f"Windows output watcher started on {config.WIN_OUTPUT_MOUNT}")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
 
-
-def destination_for_job(job):
-    job_type = job.get('type')
-    input_path = job.get('input_path', '')
-    file_name = os.path.splitext(os.path.basename(input_path))[0]
-    episode_slug = sanitize_segment(file_name)
-
-    if job_type == 'movie':
-        movie_name = sanitize_segment(file_name)
-        return os.path.join(VOD_HLS_DIR, 'movies', movie_name)
-    if job_type == 'tv':
-        rel = os.path.relpath(input_path, config.SOURCE_BASE_TV)
-        parts = rel.split(os.sep)
-        series = sanitize_segment(parts[0]) if len(parts) > 0 else 'Unknown'
-        season = sanitize_segment(parts[1]) if len(parts) > 1 else 'Season_1'
-        return os.path.join(VOD_HLS_DIR, 'tv', series, season, episode_slug)
-    return os.path.join(VOD_ADS_DIR, job.get('job_id', episode_slug))
-
-
-def fix_perms(path):
-    subprocess.run(['chown', '-R', 'www-data:www-data', path], check=False)
-    subprocess.run(['chmod', '-R', '755', path], check=False)
-
-
-def run():
-    logger.info('Windows output watcher started')
-    os.makedirs(WIN_OUTPUT_DIR, exist_ok=True)
-    while True:
-        for entry in os.listdir(WIN_OUTPUT_DIR):
-            src_dir = os.path.join(WIN_OUTPUT_DIR, entry)
-            if not os.path.isdir(src_dir):
-                continue
-            meta_file = os.path.join(src_dir, 'job.json')
-            done_path = os.path.join(src_dir, '.processed')
-            if not os.path.exists(meta_file):
-                continue
-            if os.path.exists(done_path):
-                continue
-
-            with open(meta_file, 'r') as f:
-                job = json.load(f)
-
-            dst_dir = destination_for_job(job)
-            os.makedirs(os.path.dirname(dst_dir), exist_ok=True)
-            if os.path.exists(dst_dir):
-                shutil.rmtree(dst_dir)
-            shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
-            fix_perms(dst_dir)
-
-            job_id = job.get('job_id')
-            if job_id:
-                r.hset(f"{config.HISTORY_PREFIX}{job_id}", mapping={
-                    'status': 'completed',
-                    'worker': 'windows',
-                    'output_path': dst_dir,
-                    'end_time': datetime.utcnow().isoformat(),
-                })
-            with open(done_path, 'w') as f:
-                f.write(datetime.utcnow().isoformat())
-            logger.info('Imported windows output for %s -> %s', job_id, dst_dir)
-        time.sleep(5)
-
-
-if __name__ == '__main__':
-    run()
+if __name__ == "__main__":
+    run_watcher()

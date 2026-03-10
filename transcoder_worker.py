@@ -22,8 +22,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB, decode_responses=True)
-r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB_ADS, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
+r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB_ADS, password=config.REDIS_PASSWORD, decode_responses=True)
 
 class TranscoderWorker:
     def __init__(self):
@@ -222,7 +222,7 @@ class TranscoderWorker:
             self.update_job_status(job_id, "failed", error=str(e), job_type=job_type)
 
     def run(self):
-        logger.info("Transcoder worker started and waiting for jobs...")
+        logger.info(f"Transcoder worker started and waiting for jobs on {config.LOCAL_QUEUE}...")
         while self.running:
             job_json = r.blpop(config.LOCAL_QUEUE, timeout=5)
             if job_json:

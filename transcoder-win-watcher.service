@@ -4,10 +4,10 @@ After=network.target redis.service
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=media
+Group=media
+EnvironmentFile=-/etc/transcoder/env
 WorkingDirectory=/opt/transcoder
-Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/transcoder/venv/bin/python /opt/transcoder/win_output_watcher.py
 Restart=on-failure
 RestartSec=10

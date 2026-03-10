@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
 
 def queue_job(job_type, input_path):
     if not os.path.exists(input_path):

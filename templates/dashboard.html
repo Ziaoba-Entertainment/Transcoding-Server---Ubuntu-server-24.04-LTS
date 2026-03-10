@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream-Ziaoba Transcoder</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root { --primary-dark: #1a1a1a; --accent: #00ff88; }
+        body { background: #f4f7f6; font-family: 'Inter', sans-serif; }
+        .navbar { background: var(--primary-dark); }
+        .nav-link { color: #888; border-radius: 8px; margin: 0 5px; }
+        .nav-link.active { background: #333 !important; color: var(--accent) !important; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .status-badge { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .bg-green { background: #00ff88; box-shadow: 0 0 8px #00ff88; }
+        .bg-yellow { background: #ffcc00; }
+        .bg-red { background: #ff4444; }
+        .bg-grey { background: #888; }
+        .progress { height: 8px; border-radius: 4px; }
+        #log-container { background: #000; color: #0f0; font-family: monospace; height: 300px; overflow-y: auto; padding: 10px; font-size: 12px; }
+        .filter-bar { background: #fff; padding: 15px; border-radius: 12px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand font-weight-bold" href="#">STREAM-ZIAOBA <span class="text-accent" style="color:#00ff88">PIPELINE</span></a>
+        <div class="navbar-nav ms-auto">
+            <a class="nav-link active" data-bs-toggle="tab" href="#queue-tab">Queue</a>
+            <a class="nav-link" data-bs-toggle="tab" href="#completed-tab">Completed</a>
+            <a class="nav-link" data-bs-toggle="tab" href="#ads-tab">Ads</a>
+            <a class="nav-link" data-bs-toggle="tab" href="#system-tab">System</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container">
+    <div id="error-banner" class="alert alert-danger d-none">Connection lost — retrying...</div>
+
+    <div class="tab-content">
+        <!-- QUEUE TAB -->
+        <div class="tab-pane fade show active" id="queue-tab">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div id="queue-summary">
+                    <span class="badge bg-secondary p-2 me-2">Incoming: <span id="sum-incoming">0</span></span>
+                    <span class="badge bg-primary p-2 me-2">Local VAAPI: <span id="sum-local">0</span></span>
+                    <span class="badge bg-info p-2">Windows NVENC: <span id="sum-windows">0</span></span>
+                </div>
+                <button class="btn btn-sm btn-outline-dark" onclick="fetchQueue()">Refresh Now</button>
+            </div>
+            <div class="card p-0">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Pos</th>
+                            <th>Filename</th>
+                            <th>Type</th>
+                            <th>Worker</th>
+                            <th>Queued At</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="queue-table-body">
+                        <tr><td colspan="6" class="text-center p-4">Queue is empty — waiting for new files</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- COMPLETED TAB -->
+        <div class="tab-pane fade" id="completed-tab">
+            <div class="filter-bar card">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <input type="text" id="search-input" class="form-control" placeholder="Search title or ID...">
+                    </div>
+                    <div class="col-md-2">
+                        <select id="type-filter" class="form-select">
+                            <option value="all">All Types</option>
+                            <option value="movie">Movies</option>
+                            <option value="tv">TV</option>
+                            <option value="ad">Ads</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select id="worker-filter" class="form-select">
+                            <option value="all">All Workers</option>
+                            <option value="local">Local (VAAPI)</option>
+                            <option value="windows">Windows (NVENC)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select id="date-filter" class="form-select">
+                            <option value="all">All Time</option>
+                            <option value="today">Today</option>
+                            <option value="7">Last 7 Days</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3 text-end">
+                        <button class="btn btn-primary" onclick="fetchHistory()">Apply</button>
+                    </div>
+                </div>
+            </div>
+            <div class="card p-0">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Title</th>
+                            <th>Type</th>
+                            <th>Worker</th>
+                            <th>Completed</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th>Link</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ADS TAB -->
+        <div class="tab-pane fade" id="ads-tab">
+            <div class="card p-4 mb-4">
+                <h5>Upload New Advertisement</h5>
+                <form id="ad-upload-form" class="row g-3">
+                    <div class="col-md-4"><input type="file" name="file" class="form-control" required></div>
+                    <div class="col-md-3"><input type="text" name="description" class="form-control" placeholder="Description" required></div>
+                    <div class="col-md-3"><input type="text" name="advertiser_name" class="form-control" placeholder="Advertiser" required></div>
+                    <div class="col-md-2"><button type="submit" class="btn btn-success w-100">Upload</button></div>
+                </form>
+                <div id="upload-status" class="mt-2 d-none"></div>
+            </div>
+            <div class="card p-0">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Advertiser / Campaign</th>
+                            <th>Description</th>
+                            <th>Plays</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ads-table-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- SYSTEM TAB -->
+        <div class="tab-pane fade" id="system-tab">
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="row" id="services-container">
+                        <!-- Service cards injected here -->
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card p-3 mb-3" id="windows-card">
+                        <h6>Windows Worker</h6>
+                        <div id="win-status-content">Checking...</div>
+                        <hr>
+                        <button class="btn btn-sm btn-warning w-100" onclick="rebalanceQueue()">Force Route to Windows</button>
+                    </div>
+                    <div class="card p-0 overflow-hidden">
+                        <div class="bg-dark text-white p-2 d-flex justify-content-between">
+                            <span>Live Worker Logs</span>
+                            <small id="log-status">Connecting...</small>
+                        </div>
+                        <div id="log-container"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Ad Modal -->
+<div class="modal fade" id="editAdModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5>Edit Advertisement</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body">
+                <form id="edit-ad-form">
+                    <input type="hidden" id="edit-ad-id">
+                    <div class="mb-3"><label>Description</label><input type="text" id="edit-desc" class="form-control"></div>
+                    <div class="mb-3"><label>Advertiser</label><input type="text" id="edit-adv" class="form-control"></div>
+                    <div class="mb-3"><label>Max Plays (0=unlimited)</label><input type="number" id="edit-max" class="form-control"></div>
+                    <div class="form-check"><input type="checkbox" id="edit-enabled" class="form-check-input"><label>Enabled</label></div>
+                </form>
+            </div>
+            <div class="modal-footer"><button class="btn btn-primary" onclick="saveAd()">Save Changes</button></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const API_BASE = "/api";
+    let historyData = [];
+    let adsData = [];
+
+    // --- UTILS ---
+    function timeAgo(date) {
+        if (!date) return "N/A";
+        const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+        if (seconds < 60) return "Just now";
+        const interval = Math.floor(seconds / 60);
+        return interval + " mins ago";
+    }
+
+    // --- QUEUE ---
+    async function fetchQueue() {
+        try {
+            const res = await fetch(`${API_BASE}/queue/status`);
+            const data = await res.json();
+            document.getElementById('sum-incoming').innerText = data.summary.incoming;
+            document.getElementById('sum-local').innerText = data.summary.local;
+            document.getElementById('sum-windows').innerText = data.summary.windows;
+
+            const tbody = document.getElementById('queue-table-body');
+            const allJobs = [...data.queues.transcode_queue, ...data.queues.local_transcode_queue, ...data.queues.windows_transcode_queue];
+            
+            if (allJobs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center p-4">Queue is empty — waiting for new files</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = allJobs.map(j => `
+                <tr>
+                    <td>${j.pos}</td>
+                    <td>${j.filename}</td>
+                    <td><span class="badge bg-secondary">${j.type}</span></td>
+                    <td>${j.worker}</td>
+                    <td>${timeAgo(j.queued_at)}</td>
+                    <td><button class="btn btn-sm btn-danger" onclick="removeJob('${j.job_id}')">Remove</button></td>
+                </tr>
+            `).join('');
+        } catch (e) { console.error(e); }
+    }
+
+    async function removeJob(id) {
+        if (!confirm("Remove this job?")) return;
+        await fetch(`${API_BASE}/queue/job/${id}`, { method: 'DELETE' });
+        fetchQueue();
+    }
+
+    // --- HISTORY ---
+    async function fetchHistory() {
+        try {
+            const res = await fetch(`${API_BASE}/jobs/completed`);
+            const data = await res.json();
+            historyData = data.jobs;
+            renderHistory();
+        } catch (e) { console.error(e); }
+    }
+
+    function renderHistory() {
+        const search = document.getElementById('search-input').value.toLowerCase();
+        const type = document.getElementById('type-filter').value;
+        const worker = document.getElementById('worker-filter').value;
+        
+        const filtered = historyData.filter(j => {
+            const matchSearch = (j.title || "").toLowerCase().includes(search) || (j.job_id || "").includes(search);
+            const matchType = type === 'all' || j.type === type;
+            const matchWorker = worker === 'all' || (j.worker || "").toLowerCase().includes(worker);
+            return matchSearch && matchType && matchWorker;
+        });
+
+        document.getElementById('history-table-body').innerHTML = filtered.map(j => `
+            <tr>
+                <td><small class="text-muted">${(j.job_id || "").slice(0,8)}</small> <strong>${j.title}</strong></td>
+                <td>${j.type}</td>
+                <td>${j.worker}</td>
+                <td>${timeAgo(j.completed_at)}</td>
+                <td>${j.duration_minutes}m</td>
+                <td>
+                    <span class="badge ${j.hls_verified ? 'bg-success' : (j.status === 'failed' ? 'bg-danger' : 'bg-warning')}">
+                        ${j.verification_label}
+                    </span>
+                </td>
+                <td>${j.hls_url ? `<a href="${j.hls_url}" target="_blank" class="btn btn-sm btn-link">M3U8</a>` : '-'}</td>
+            </tr>
+        `).join('');
+    }
+
+    // --- ADS ---
+    async function fetchAds() {
+        try {
+            const res = await fetch(`${API_BASE}/ads`);
+            const data = await res.json();
+            adsData = data.ads;
+            document.getElementById('ads-table-body').innerHTML = adsData.map(a => {
+                const perc = a.max_plays > 0 ? Math.min(100, (a.current_plays / a.max_plays) * 100) : 0;
+                return `
+                    <tr>
+                        <td><strong>${a.advertiser_name}</strong><br><small>${a.campaign_name || 'No Campaign'}</small></td>
+                        <td>${a.description}</td>
+                        <td style="width: 200px">
+                            <div class="d-flex justify-content-between small">
+                                <span>${a.current_plays} / ${a.max_plays || '∞'}</span>
+                                <span>${a.max_plays > 0 ? Math.round(perc)+'%' : ''}</span>
+                            </div>
+                            <div class="progress"><div class="progress-bar ${perc > 90 ? 'bg-danger' : 'bg-success'}" style="width: ${a.max_plays > 0 ? perc : 100}%"></div></div>
+                        </td>
+                        <td>
+                            ${!a.enabled ? '<span class="badge bg-secondary">Disabled</span>' : (a.exhausted ? '<span class="badge bg-danger">Exhausted</span>' : '<span class="badge bg-success">Active</span>')}
+                            ${a.hls_ready ? '<span class="badge bg-info">Ready</span>' : '<span class="badge bg-warning">Encoding</span>'}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="editAd('${a.ad_id}')">Edit</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        } catch (e) { console.error(e); }
+    }
+
+    function editAd(id) {
+        const a = adsData.find(x => x.ad_id === id);
+        if (!a) return;
+        document.getElementById('edit-ad-id').value = a.ad_id;
+        document.getElementById('edit-desc').value = a.description;
+        document.getElementById('edit-adv').value = a.advertiser_name;
+        document.getElementById('edit-max').value = a.max_plays;
+        document.getElementById('edit-enabled').checked = a.enabled;
+        new bootstrap.Modal(document.getElementById('editAdModal')).show();
+    }
+
+    async function saveAd() {
+        const id = document.getElementById('edit-ad-id').value;
+        const payload = {
+            description: document.getElementById('edit-desc').value,
+            advertiser_name: document.getElementById('edit-adv').value,
+            max_plays: parseInt(document.getElementById('edit-max').value),
+            enabled: document.getElementById('edit-enabled').checked
+        };
+        await fetch(`${API_BASE}/ad/${id}`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        bootstrap.Modal.getInstance(document.getElementById('editAdModal')).hide();
+        fetchAds();
+    }
+
+    // --- SYSTEM ---
+    async function fetchSystem() {
+        try {
+            const res = await fetch(`${API_BASE}/services/status`);
+            const data = await res.json();
+            document.getElementById('error-banner').classList.add('d-none');
+
+            // Services
+            document.getElementById('services-container').innerHTML = data.services.map(s => `
+                <div class="col-md-6 mb-3">
+                    <div class="card p-3 d-flex flex-row justify-content-between align-items-center">
+                        <div>
+                            <div class="status-badge bg-${s.colour}"></div>
+                            <strong>${s.name}</strong><br>
+                            <small class="text-muted">${s.display}</small>
+                        </div>
+                        <button class="btn btn-sm btn-light" onclick="restartService('${s.unit}', this)">Restart</button>
+                    </div>
+                </div>
+            `).join('');
+
+            // Windows
+            const win = data.windows_worker;
+            const winBox = document.getElementById('win-status-content');
+            if (win.status === 'online') {
+                winBox.innerHTML = `
+                    <div class="d-flex align-items-center mb-2">
+                        <div class="status-badge bg-green"></div> <strong>${win.hostname}</strong>
+                    </div>
+                    <div class="small">
+                        IP: ${win.ip}<br>
+                        Last seen: ${win.last_seen_seconds}s ago<br>
+                        Queue Depth: <strong>${win.queue_depth}</strong><br>
+                        <span class="${win.warning ? 'text-danger fw-bold' : 'text-muted'}">Heartbeat expires in: ${win.ttl}s</span>
+                    </div>
+                `;
+            } else {
+                winBox.innerHTML = '<div class="text-danger">OFFLINE — check Windows machine</div>';
+            }
+        } catch (e) {
+            document.getElementById('error-banner').classList.remove('d-none');
+        }
+    }
+
+    async function restartService(unit, btn) {
+        btn.disabled = true;
+        const oldText = btn.innerText;
+        btn.innerText = "Restarting...";
+        await fetch(`${API_BASE}/service/${unit}/restart`, { method: 'POST' });
+        setTimeout(() => {
+            fetchSystem();
+            btn.disabled = false;
+            btn.innerText = oldText;
+        }, 3000);
+    }
+
+    async function rebalanceQueue() {
+        const res = await fetch(`${API_BASE}/queue/rebalance`, { method: 'POST' });
+        const data = await res.json();
+        alert(data.error || `Moved ${data.moved} jobs to Windows`);
+        fetchQueue();
+    }
+
+    // --- LOGS ---
+    function initLogs() {
+        const es = new EventSource('/transcoder/stream');
+        const container = document.getElementById('log-container');
+        es.onmessage = (e) => {
+            document.getElementById('log-status').innerText = "Live";
+            const line = document.createElement('div');
+            line.innerText = e.data;
+            container.appendChild(line);
+            container.scrollTop = container.scrollHeight;
+            if (container.childNodes.length > 500) container.removeChild(container.firstChild);
+        };
+        es.onerror = () => { document.getElementById('log-status').innerText = "Disconnected"; };
+    }
+
+    // --- INIT ---
+    document.getElementById('ad-upload-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = e.target.querySelector('button');
+        btn.disabled = true;
+        const status = document.getElementById('upload-status');
+        status.classList.remove('d-none');
+        status.innerHTML = '<div class="spinner-border spinner-border-sm"></div> Uploading...';
+        
+        const formData = new FormData(e.target);
+        const res = await fetch(`${API_BASE}/ad/upload`, { method: 'POST', body: formData });
+        const data = await res.json();
+        
+        if (data.ad_id) {
+            status.innerHTML = `<span class="text-success">Queued: ${data.ad_id}.</span> URL: <a href="${data.hls_url}" target="_blank">${data.hls_url}</a>`;
+            fetchAds();
+        } else {
+            status.innerHTML = `<span class="text-danger">Error: ${data.error}</span>`;
+        }
+        btn.disabled = false;
+    };
+
+    setInterval(fetchQueue, 15000);
+    setInterval(fetchSystem, 8000);
+    setInterval(fetchAds, 30000);
+    
+    fetchQueue();
+    fetchHistory();
+    fetchAds();
+    fetchSystem();
+    initLogs();
+</script>
+</body>
+</html>

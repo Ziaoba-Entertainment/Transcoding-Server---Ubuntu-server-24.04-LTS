@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
 
 def requeue_failed_jobs():
     logger.info("Starting auto-requeue of failed jobs...")
@@ -25,7 +25,7 @@ def requeue_failed_jobs():
     requeued_count = 0
     
     # Get current queue to avoid double-queuing
-    queue_items = r.lrange(config.QUEUE_NAME, 0, -1)
+    queue_items = r.lrange(config.TRANSCODE_QUEUE, 0, -1)
     queued_paths = set()
     for item in queue_items:
         try:
@@ -73,7 +73,7 @@ def requeue_failed_jobs():
                 "error": "" # Clear previous error
             })
             
-            r.rpush(config.QUEUE_NAME, json.dumps(job_payload))
+            r.rpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
             logger.info(f"Re-queued failed job {job_id}: {input_path}")
             requeued_count += 1
             queued_paths.add(input_path)
