@@ -22,8 +22,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, decode_responses=True)
-r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB_ADS, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB, decode_responses=True)
+r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB_ADS, decode_responses=True)
 
 class TranscoderWorker:
     def __init__(self):
@@ -62,7 +62,8 @@ class TranscoderWorker:
         data = {
             "status": status,
             "last_update": datetime.now().isoformat(),
-            "progress": progress
+            "progress": progress,
+            "worker": "local"
         }
         if error:
             data["error"] = error
@@ -223,7 +224,7 @@ class TranscoderWorker:
     def run(self):
         logger.info("Transcoder worker started and waiting for jobs...")
         while self.running:
-            job_json = r.blpop(config.QUEUE_NAME, timeout=5)
+            job_json = r.blpop(config.LOCAL_QUEUE, timeout=5)
             if job_json:
                 job_data = json.loads(job_json[1])
                 logger.info(f"Picked up job: {job_data['job_id']} ({job_data['type']})")
