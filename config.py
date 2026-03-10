@@ -24,13 +24,21 @@ SCANNER_LOG = os.path.join(LOG_DIR, "scanner.log")
 WEBUI_LOG = os.path.join(LOG_DIR, "webui.log")
 
 # --- REDIS SETTINGS ---
-REDIS_HOST = "localhost"
+REDIS_HOST = '127.0.0.1'
 REDIS_PORT = 6379
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', '')
 REDIS_DB = 0
 REDIS_DB_ADS = 1
-QUEUE_NAME = "transcode_queue"
+TRANSCODE_QUEUE = 'transcode_queue'
+LOCAL_QUEUE = 'local_transcode_queue'
+WINDOWS_QUEUE = 'windows_transcode_queue'
+QUEUE_NAME = TRANSCODE_QUEUE
 HISTORY_PREFIX = "job_history:"
 ACTIVE_JOB_KEY = "active_transcode_job"
+WIN_HEARTBEAT_KEY = 'worker:windows:heartbeat'
+WIN_HEARTBEAT_TTL = 60
+WIN_OUTPUT_MOUNT = '/mnt/win_worker'
+ROUTER_STATUS_KEY = 'router:status'
 AD_REGISTRY_KEY = "ad_registry"
 AD_META_PREFIX = "ad_meta:"
 AD_PLAYS_PREFIX = "ad_plays:"
