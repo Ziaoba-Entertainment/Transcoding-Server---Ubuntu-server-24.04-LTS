@@ -60,7 +60,10 @@ def run():
             if not os.path.isdir(src_dir):
                 continue
             meta_file = os.path.join(src_dir, 'job.json')
+            done_path = os.path.join(src_dir, '.processed')
             if not os.path.exists(meta_file):
+                continue
+            if os.path.exists(done_path):
                 continue
 
             with open(meta_file, 'r') as f:
@@ -81,7 +84,6 @@ def run():
                     'output_path': dst_dir,
                     'end_time': datetime.utcnow().isoformat(),
                 })
-            done_path = os.path.join(src_dir, '.processed')
             with open(done_path, 'w') as f:
                 f.write(datetime.utcnow().isoformat())
             logger.info('Imported windows output for %s -> %s', job_id, dst_dir)
