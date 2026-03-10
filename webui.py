@@ -27,8 +27,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, decode_responses=True)
-r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB_ADS, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB, decode_responses=True)
+r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB_ADS, decode_responses=True)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
