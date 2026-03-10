@@ -1,0 +1,16 @@
+[Unit]
+Description=Transcoder Startup Scanner
+After=network.target redis.service
+Before=transcoder-worker.service
+
+[Service]
+Type=oneshot
+User=media
+Group=media
+WorkingDirectory=/opt/transcoder
+ExecStart=/opt/transcoder/venv/bin/python /opt/transcoder/folder_scanner.py --once
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

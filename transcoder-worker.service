@@ -1,0 +1,17 @@
+[Unit]
+Description=Transcoder Worker Service
+After=network.target redis.service
+
+[Service]
+Type=simple
+User=media
+Group=media
+WorkingDirectory=/opt/transcoder
+ExecStart=/opt/transcoder/venv/bin/python /opt/transcoder/transcoder_worker.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
