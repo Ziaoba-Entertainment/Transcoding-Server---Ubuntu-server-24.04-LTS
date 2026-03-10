@@ -40,8 +40,8 @@ def destination_for_job(job):
     if job_type == 'tv':
         rel = os.path.relpath(input_path, config.SOURCE_BASE_TV)
         parts = rel.split(os.sep)
-        series = sanitize_segment(parts[0]) if len(parts) > 1 else 'Unknown'
-        season = sanitize_segment(parts[1]) if len(parts) > 2 else 'Season_1'
+        series = sanitize_segment(parts[0]) if len(parts) > 0 else 'Unknown'
+        season = sanitize_segment(parts[1]) if len(parts) > 1 else 'Season_1'
         return os.path.join(VOD_HLS_DIR, 'tv', series, season, episode_slug)
     return os.path.join(VOD_ADS_DIR, job.get('job_id', episode_slug))
 
