@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=getattr(config, 'REDIS_PASSWORD', None) or None, db=config.REDIS_DB, decode_responses=True)
 
 def is_already_processed(file_path):
     # Check history
@@ -35,7 +35,7 @@ def is_already_processed(file_path):
                 return True
     
     # Check queue
-    queue_items = r.lrange(config.QUEUE_NAME, 0, -1)
+    queue_items = r.lrange(config.TRANSCODE_QUEUE, 0, -1)
     for item in queue_items:
         data = json.loads(item)
         if data.get('input_path') == file_path:
@@ -55,7 +55,7 @@ def queue_file(job_type, file_path, job_id=None):
         "queued_at": datetime.now().isoformat()
     }
     r.hset(f"{config.HISTORY_PREFIX}{job_id}", mapping=job_payload)
-    r.rpush(config.QUEUE_NAME, json.dumps(job_payload))
+    r.rpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
     logger.info(f"Scanner queued {job_type}: {file_path}")
 
 class AdFolderHandler(FileSystemEventHandler):
