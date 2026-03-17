@@ -161,6 +161,9 @@ server {
     listen __PUBLIC_PORT__;
     server_name __LOCAL_IP__;
 
+    # Allow large file uploads (up to 20GB)
+    client_max_body_size 20G;
+
     # Local Network Access Control
     allow 192.168.0.0/24;
     allow 127.0.0.1;

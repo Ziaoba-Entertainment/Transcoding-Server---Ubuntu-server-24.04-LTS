@@ -1,7 +1,7 @@
 #!/bin/bash
 # install.sh - Stream-Ziaoba Transcoder Pipeline Maintenance Script
 # This script handles installation, upgrades, and system maintenance.
-# Updated: 2026-03-13 - v2.5.0 (VOD/Stitched Links Fix, Job Titles, Output Cleanup).
+# Updated: 2026-03-17 - v2.5.1 (Upload Robustness, Stitched URL Fix, Permission Sync).
 
 set -e
 
@@ -202,6 +202,7 @@ SCRIPTS=(
     "folder_scanner.py" "webui.py" "auto_requeue.py" 
     "job_router.py" "win_output_watcher.py" "check_vaapi.sh" 
     "windows_worker_setup.bat" "force_win.py" "integration_utils.py"
+    "monitor_redis.py" "test_distributed.sh"
 )
 for script in "${SCRIPTS[@]}"; do
     if [ -f "$script" ]; then
@@ -216,6 +217,7 @@ if [ -d "templates" ]; then
 fi
 
 chmod +x "$INSTALL_DIR/check_vaapi.sh"
+chmod +x "$INSTALL_DIR/test_distributed.sh"
 chown -R media:media "$INSTALL_DIR"
 chown -R media:media "$LOG_DIR"
 

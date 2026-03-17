@@ -646,17 +646,24 @@
         const formData = new FormData(e.target);
         try {
             const res = await fetch(`${API_BASE}/ad/upload`, { method: 'POST', body: formData });
-            const data = await res.json();
             
-            if (data.ad_id) {
+            let data;
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                data = await res.json();
+            }
+
+            if (res.ok && data && data.ad_id) {
                 status.innerHTML = `<div class="alert alert-success"><strong>Success!</strong> Ad ${data.ad_id} queued. <a href="${data.hls_url}" target="_blank">Preview URL</a></div>`;
                 fetchAds();
                 e.target.reset();
             } else {
-                status.innerHTML = `<div class="alert alert-danger"><strong>Error:</strong> ${data.error}</div>`;
+                const errorMsg = (data && data.error) ? data.error : `Upload failed (HTTP ${res.status})`;
+                status.innerHTML = `<div class="alert alert-danger"><strong>Error:</strong> ${errorMsg}</div>`;
             }
         } catch (err) {
-            status.innerHTML = `<div class="alert alert-danger"><strong>Network Error:</strong> Failed to upload.</div>`;
+            console.error("Upload exception:", err);
+            status.innerHTML = `<div class="alert alert-danger"><strong>Network Error:</strong> Failed to upload. Check your connection.</div>`;
         }
         btn.disabled = false;
     };

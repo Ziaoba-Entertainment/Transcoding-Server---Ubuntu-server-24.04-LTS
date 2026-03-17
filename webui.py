@@ -11,12 +11,17 @@ import redis
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 import config
 import integration_utils
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20GB
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_file_too_large(e):
+    return jsonify({"error": "Upload exceeds 20GB limit. Please choose a smaller file."}), 413
 
 # Setup logging
 logging.basicConfig(
@@ -331,9 +336,11 @@ def get_completed_jobs():
                         rel_path = os.path.relpath(current_output_path, "/srv/vod")
                         vod_url = f"http://{config.PUBLIC_IP}:{config.PUBLIC_PORT}/vod/{rel_path}/master.m3u8"
                         
-                        # Stitched URL: https://stream.ziaoba.com/playlist/hls/movies/.../master.m3u8
+                        # Stitched URL: https://stream.ziaoba.com/playlist/tv/<series>/<episode>/master.m3u8
                         if job_type in ["movie", "tv"]:
-                            stitched_url = f"https://{config.PUBLIC_DOMAIN}/playlist/{rel_path}/master.m3u8"
+                            # Strip leading 'hls/' from rel_path for the stitched domain
+                            stripped_rel_path = rel_path[4:] if rel_path.startswith("hls/") else rel_path
+                            stitched_url = f"https://{config.PUBLIC_DOMAIN}/playlist/{stripped_rel_path}/master.m3u8"
 
             jobs.append({
                 "job_id": job_id,
@@ -381,7 +388,11 @@ def upload_ad():
         description = request.form.get('description')
         advertiser_name = request.form.get('advertiser_name')
         campaign_name = request.form.get('campaign_name', '')
-        max_plays = int(request.form.get('max_plays', 0))
+        
+        try:
+            max_plays = int(request.form.get('max_plays', 0))
+        except (ValueError, TypeError):
+            max_plays = 0
 
         if not description or not advertiser_name:
             return jsonify({"error": "Missing required fields: description or advertiser_name"}), 400
