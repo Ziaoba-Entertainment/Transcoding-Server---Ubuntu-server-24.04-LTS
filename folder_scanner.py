@@ -6,6 +6,7 @@ import json
 import uuid
 import re
 from datetime import datetime
+from pathlib import Path
 import argparse
 import time
 import threading
@@ -27,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=config.REDIS_PASSWORD, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
 
 # VALID MOVIE FOLDER REGEX - More lenient to support spaces and common naming
 VALID_MOVIE_RE = re.compile(r'.* \(\d{4}\)$')

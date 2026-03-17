@@ -10,6 +10,7 @@ import re
 import redis
 from datetime import datetime
 import config
+import integration_utils
 
 # Redis Log Handler
 class RedisHandler(logging.Handler):
@@ -88,7 +89,7 @@ class TranscoderWorker:
                     ad_meta = json.load(f)
                 ad_meta['status'] = status
                 if error: ad_meta['error'] = error
-                if status == 'completed': ad_meta['completed_at'] = data['end_time']
+                if status == 'completed': ad_meta['completed_at'] = data.get('completed_at')
                 with open(meta_path, 'w') as f:
                     json.dump(ad_meta, f)
                 
@@ -101,8 +102,12 @@ class TranscoderWorker:
                         "status": "completed",
                         "last_update": datetime.now().isoformat()
                     })
+                    # Notify Ad Admin API
+                    integration_utils.call_ad_admin(f'/api/ads/{job_id}/status', data={"status": "completed"})
                 elif status == 'failed':
                     r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "status", "failed")
+                    # Notify Ad Admin API
+                    integration_utils.call_ad_admin(f'/api/ads/{job_id}/status', data={"status": "failed", "error": error})
 
         # Update active job info for Web UI
         if status in ["processing", "verifying", "archiving"]:

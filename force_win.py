@@ -4,11 +4,7 @@ import json
 import uuid
 import sys
 import os
-
-# HARDCODED CREDENTIALS
-REDIS_HOST = "192.168.0.103"
-REDIS_PORT = 6379
-REDIS_PASSWORD = "TranscoderRedis2024!"
+import config
 
 def force_windows(path):
     if not os.path.exists(path):
@@ -16,9 +12,9 @@ def force_windows(path):
         return
 
     r = redis.Redis(
-        host=REDIS_HOST, 
-        port=REDIS_PORT, 
-        password=REDIS_PASSWORD, 
+        host=config.REDIS_HOST, 
+        port=config.REDIS_PORT, 
+        password=config.REDIS_PASSWORD, 
         decode_responses=True
     )
 

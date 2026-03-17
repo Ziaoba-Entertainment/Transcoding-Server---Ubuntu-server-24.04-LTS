@@ -8,6 +8,7 @@ Type=oneshot
 User=media
 Group=media
 EnvironmentFile=-/etc/transcoder/env
+EnvironmentFile=-/etc/ziaoba/redis.env
 WorkingDirectory=/opt/transcoder
 ExecStart=/opt/transcoder/venv/bin/python /opt/transcoder/folder_scanner.py --once
 StandardOutput=journal

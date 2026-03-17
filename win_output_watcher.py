@@ -5,6 +5,7 @@ import shutil
 import logging
 import redis
 import config
+import integration_utils
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from datetime import datetime
@@ -40,7 +41,7 @@ class WinOutputHandler(FileSystemEventHandler):
             win_job_dir = os.path.dirname(done_file_path)
             
             if job_type == 'ad':
-                dest_dir = os.path.join(config.ADS_OUTPUT_DIR, os.path.basename(win_job_dir))
+                dest_dir = os.path.join(config.OUTPUT_BASE_ADS, os.path.basename(win_job_dir))
             else:
                 dest_dir = os.path.dirname(output_path)
             
@@ -69,6 +70,8 @@ class WinOutputHandler(FileSystemEventHandler):
             if job_type == 'ad':
                 r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "status", "active")
                 r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "completed_at", datetime.now().isoformat())
+                # Notify Ad Admin API
+                integration_utils.call_ad_admin(f'/api/ads/{job_id}/status', data={"status": "completed"})
             
             # Publish event to transcoder:events channel
             event_payload = {

@@ -45,7 +45,7 @@ server {
             return 204;
         }
 
-        proxy_pass http://127.0.0.1:8083;
+        proxy_pass http://127.0.0.1:__ADSERVER_PORT__;
         proxy_http_version 1.1;
         
         # Force headers for FastAPI to generate correct URLs (https://stream.ziaoba.com/segments/...)
@@ -107,7 +107,7 @@ server {
 
     # 5. Health Check (Proxied to FastAPI)
     location = /health {
-        proxy_pass http://127.0.0.1:8083/health;
+        proxy_pass http://127.0.0.1:__ADSERVER_PORT__/health;
         access_log off;
     }
 
@@ -127,10 +127,11 @@ server {
 # This block is ONLY accessible from the local network (192.168.0.0/24).
 server {
     listen 8082;
-    server_name 192.168.0.103;
+    server_name __LOCAL_IP__;
 
     # Local Network Access Control
     allow 192.168.0.0/24;
+    allow 127.0.0.1;
     deny all;
 
     location / {
@@ -157,11 +158,12 @@ server {
 # ==========================================================
 # This block is ONLY accessible from the local network (192.168.0.0/24).
 server {
-    listen 8081;
-    server_name 192.168.0.103;
+    listen __PUBLIC_PORT__;
+    server_name __LOCAL_IP__;
 
     # Local Network Access Control
     allow 192.168.0.0/24;
+    allow 127.0.0.1;
     deny all;
 
     # VOD Direct Access (Local Network Only)
@@ -204,7 +206,7 @@ server {
     }
 
     location /transcoder/ {
-        proxy_pass http://127.0.0.1:6666/; # Internal Transcoder Web UI port
+        proxy_pass http://127.0.0.1:__WEBUI_PORT__/; # Internal Transcoder Web UI port
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -216,7 +218,7 @@ server {
 
         # Handle EventSource (Logs) inside the prefix
         location /transcoder/stream {
-            proxy_pass http://127.0.0.1:6666/stream;
+            proxy_pass http://127.0.0.1:__WEBUI_PORT__/stream;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             proxy_buffering off;

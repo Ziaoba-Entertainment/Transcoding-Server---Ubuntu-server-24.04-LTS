@@ -59,12 +59,21 @@ fi
 
 # 2. Configuration & Environment
 mkdir -p /etc/transcoder
+mkdir -p /etc/ziaoba
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
+
+# Ensure monitoring group exists
+if ! getent group monitoring > /dev/null; then
+    groupadd monitoring
+fi
 
 # Load existing environment
 if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
+fi
+if [ -f "/etc/ziaoba/redis.env" ]; then
+    source "/etc/ziaoba/redis.env"
 fi
 
 # 3. Install/Update System Dependencies
@@ -73,11 +82,20 @@ apt-get update -qq
 apt-get install -y -qq ffmpeg redis-server python3-pip python3-venv libva-drm2 mesa-va-drivers vainfo nginx samba smbclient curl uuid-runtime > /dev/null
 
 # 4. Redis Configuration
-REDIS_HOST=${REDIS_HOST:-"192.168.0.103"}
+REDIS_HOST=${REDIS_HOST:-"127.0.0.1"}
 REDIS_PORT=${REDIS_PORT:-"6379"}
 REDIS_PASSWORD=${REDIS_PASSWORD:-"TranscoderRedis2024!"}
 
-# Update environment file atomically
+# Update standardized Redis credential file
+cat <<EOF > /etc/ziaoba/redis.env
+REDIS_HOST=$REDIS_HOST
+REDIS_PORT=$REDIS_PORT
+REDIS_PASSWORD=$REDIS_PASSWORD
+EOF
+chown root:monitoring /etc/ziaoba/redis.env
+chmod 640 /etc/ziaoba/redis.env
+
+# Update environment file atomically (legacy support)
 cat <<EOF > /tmp/transcoder_env
 REDIS_HOST=$REDIS_HOST
 REDIS_PORT=$REDIS_PORT
@@ -116,6 +134,7 @@ fi
 usermod -aG video media
 usermod -aG render media
 usermod -aG www-data media
+usermod -aG monitoring media
 
 # 6. Directory Structure
 echo "Enforcing directory structure..."
@@ -174,7 +193,7 @@ if [ ! -d "$INSTALL_DIR/venv" ]; then
     sudo -u media python3 -m venv "$INSTALL_DIR/venv"
 fi
 sudo -u media "$INSTALL_DIR/venv/bin/pip" install -q --upgrade pip
-sudo -u media "$INSTALL_DIR/venv/bin/pip" install -q flask flask-cors redis psutil werkzeug python-magic watchdog
+sudo -u media "$INSTALL_DIR/venv/bin/pip" install -q flask flask-cors redis psutil werkzeug python-magic watchdog requests python-dotenv
 
 # 9. Deploy Scripts & Templates
 echo "Deploying application scripts and templates..."
@@ -182,7 +201,7 @@ SCRIPTS=(
     "config.py" "transcoder_worker.py" "webhook_receiver.py" 
     "folder_scanner.py" "webui.py" "auto_requeue.py" 
     "job_router.py" "win_output_watcher.py" "check_vaapi.sh" 
-    "windows_worker_setup.bat" "force_win.py"
+    "windows_worker_setup.bat" "force_win.py" "integration_utils.py"
 )
 for script in "${SCRIPTS[@]}"; do
     if [ -f "$script" ]; then
@@ -198,6 +217,7 @@ fi
 
 chmod +x "$INSTALL_DIR/check_vaapi.sh"
 chown -R media:media "$INSTALL_DIR"
+chown -R media:media "$LOG_DIR"
 
 # 10. System Services
 echo "Deploying systemd units..."
@@ -230,7 +250,18 @@ if [ -f "mediaserver" ]; then
     rm -f /etc/nginx/sites-enabled/*
     rm -f /etc/nginx/sites-available/mediaserver
     
-    cp mediaserver /etc/nginx/sites-available/mediaserver
+    # Replace placeholders with environment variables or defaults
+    WEBUI_PORT_INTERNAL=${WEBUI_PORT_INTERNAL:-6666}
+    ADSERVER_PORT_INTERNAL=${ADSERVER_PORT_INTERNAL:-8083}
+    PUBLIC_PORT=${PUBLIC_PORT:-8081}
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    sed -e "s/__WEBUI_PORT__/$WEBUI_PORT_INTERNAL/g" \
+        -e "s/__ADSERVER_PORT__/$ADSERVER_PORT_INTERNAL/g" \
+        -e "s/__PUBLIC_PORT__/$PUBLIC_PORT/g" \
+        -e "s/__LOCAL_IP__/$LOCAL_IP/g" \
+        mediaserver > /etc/nginx/sites-available/mediaserver
+    
     ln -sf /etc/nginx/sites-available/mediaserver /etc/nginx/sites-enabled/
     
     echo "Testing Nginx configuration..."
@@ -288,8 +319,8 @@ sleep 10
 HEALTH_OK=true
 
 # Check Backend (Internal Port)
-if ! curl -s http://127.0.0.1:6666/api/queue/status > /dev/null; then
-    echo "WARNING: Backend WebUI (port 6666) is not responding. Check logs: journalctl -u transcoder-webui"
+if ! curl -s http://127.0.0.1:$WEBUI_PORT_INTERNAL/api/queue/status > /dev/null; then
+    echo "WARNING: Backend WebUI (port $WEBUI_PORT_INTERNAL) is not responding. Check logs: journalctl -u transcoder-webui"
     HEALTH_OK=false
 fi
 

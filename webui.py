@@ -12,12 +12,21 @@ from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import config
+import integration_utils
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20GB
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(config.WEBUI_LOG),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 @app.before_request
@@ -315,16 +324,16 @@ def get_completed_jobs():
                     if job_type == "ad":
                         # Ads: http://192.168.0.103:8081/ads/advert0004/master.m3u8
                         rel_path = os.path.relpath(current_output_path, config.OUTPUT_BASE_ADS)
-                        vod_url = f"http://192.168.0.103:8081/ads/{rel_path}/master.m3u8"
+                        vod_url = f"http://{config.PUBLIC_IP}:{config.PUBLIC_PORT}/ads/{rel_path}/master.m3u8"
                     else:
                         # Movies/TV: http://192.168.0.103:8081/vod/hls/movies/.../master.m3u8
                         # Relative to /srv/vod/ as per Nginx alias /srv/vod/
                         rel_path = os.path.relpath(current_output_path, "/srv/vod")
-                        vod_url = f"http://192.168.0.103:8081/vod/{rel_path}/master.m3u8"
+                        vod_url = f"http://{config.PUBLIC_IP}:{config.PUBLIC_PORT}/vod/{rel_path}/master.m3u8"
                         
                         # Stitched URL: https://stream.ziaoba.com/playlist/hls/movies/.../master.m3u8
                         if job_type in ["movie", "tv"]:
-                            stitched_url = f"https://stream.ziaoba.com/playlist/{rel_path}/master.m3u8"
+                            stitched_url = f"https://{config.PUBLIC_DOMAIN}/playlist/{rel_path}/master.m3u8"
 
             jobs.append({
                 "job_id": job_id,
@@ -419,11 +428,14 @@ def upload_ad():
         # Push to FRONT of main queue for immediate routing
         r.lpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
 
+        # Notify Ad Admin API
+        integration_utils.call_ad_admin('/api/ads/register', data=meta)
+
         return jsonify({
             "ad_id": ad_id,
             "status": "queued",
             "message": "Ad uploaded and queued for transcoding",
-            "hls_url": f"http://192.168.0.103/playlist/ad/{ad_id}/master.m3u8",
+            "hls_url": f"http://{config.PUBLIC_IP}/playlist/ad/{ad_id}/master.m3u8",
             "estimated_ready_minutes": 5
         })
 
@@ -450,7 +462,7 @@ def list_ads():
                 "description": meta.get("description"),
                 "advertiser_name": meta.get("advertiser_name"),
                 "campaign_name": meta.get("campaign_name"),
-                "hls_url": f"http://192.168.0.103/playlist/ad/{ad_id}/master.m3u8",
+                "hls_url": f"http://{config.PUBLIC_IP}/playlist/ad/{ad_id}/master.m3u8",
                 "hls_ready": hls_ready,
                 "max_plays": max_p,
                 "current_plays": plays,
@@ -483,6 +495,8 @@ def update_ad(ad_id):
 
         if updates:
             r_ads.hset(meta_key, mapping=updates)
+            # Notify Ad Admin API of metadata update
+            integration_utils.call_ad_admin(f'/api/ads/{ad_id}', method='PATCH', data=updates)
             
         if "enabled" in data:
             if data["enabled"]: r_ads.srem(config.ADS_DISABLED_KEY, ad_id)
@@ -624,4 +638,11 @@ def stream_logs():
     return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=6666, debug=False)
+    try:
+        logger.info(f"Starting WebUI on port {config.WEBUI_PORT}...")
+        app.run(host='0.0.0.0', port=config.WEBUI_PORT, debug=False)
+    except Exception as e:
+        logger.critical(f"WebUI failed to start: {e}", exc_info=True)
+        with open("/tmp/webui_crash.log", "w") as f:
+            f.write(str(e))
+        raise

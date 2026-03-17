@@ -1,5 +1,24 @@
 # config.py
 import os
+from dotenv import load_dotenv
+
+# Load standardized Redis credentials if available
+if os.path.exists("/etc/ziaoba/redis.env"):
+    try:
+        # Only try to load if we have read access to avoid PermissionError
+        if os.access("/etc/ziaoba/redis.env", os.R_OK):
+            load_dotenv("/etc/ziaoba/redis.env")
+    except Exception:
+        pass # Fallback to environment variables already set by systemd
+
+def get_env_int(name, default):
+    val = os.environ.get(name)
+    if not val or not val.strip():
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
 
 # --- PATHS ---
 # Source directories (where Sonarr/Radarr download to)
@@ -26,11 +45,11 @@ WIN_LOG_CHANNEL = "logs:windows"
 LOCAL_LOG_CHANNEL = "logs:local"
 
 # --- REDIS SETTINGS ---
-REDIS_HOST = os.environ.get("REDIS_HOST", "192.168.0.103")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "TranscoderRedis2024!")
-REDIS_DB = int(os.environ.get("REDIS_DB", 0))
-REDIS_DB_ADS = int(os.environ.get("REDIS_DB_ADS", 1))
+REDIS_HOST = os.environ.get("REDIS_HOST", "127.0.0.1")
+REDIS_PORT = get_env_int("REDIS_PORT", 6379)
+REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD")
+REDIS_DB = get_env_int("REDIS_DB", 0)
+REDIS_DB_ADS = get_env_int("REDIS_DB_ADS", 1)
 
 # Queue names
 TRANSCODE_QUEUE = "transcode_queue"         # webhook_receiver pushes here
@@ -93,8 +112,15 @@ FFMPEG_CMD_TEMPLATE = [
 ]
 
 # --- WEB SETTINGS ---
-WEBUI_PORT = 6666
-WEBHOOK_PORT = 6667
+WEBUI_PORT = get_env_int("WEBUI_PORT", 6666)
+WEBHOOK_PORT = get_env_int("WEBHOOK_PORT", 6667)
+AD_ADMIN_URL = os.environ.get("AD_ADMIN_URL", "http://localhost:8089")
+ADSERVER_INTERNAL_PORT = get_env_int("ADSERVER_INTERNAL_PORT", 8083)
+
+# --- PUBLIC ACCESS ---
+PUBLIC_IP = os.environ.get("PUBLIC_IP", "192.168.0.103")
+PUBLIC_PORT = get_env_int("PUBLIC_PORT", 8081)
+PUBLIC_DOMAIN = os.environ.get("PUBLIC_DOMAIN", "stream.ziaoba.com")
 
 # --- PERMISSIONS ---
 SERVICE_USER = "media"

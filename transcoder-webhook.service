@@ -7,6 +7,7 @@ Type=simple
 User=media
 Group=media
 EnvironmentFile=-/etc/transcoder/env
+EnvironmentFile=-/etc/ziaoba/redis.env
 WorkingDirectory=/opt/transcoder
 ExecStart=/opt/transcoder/venv/bin/python /opt/transcoder/webhook_receiver.py
 Restart=on-failure
