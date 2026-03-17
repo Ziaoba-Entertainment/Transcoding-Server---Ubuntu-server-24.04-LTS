@@ -28,27 +28,44 @@ def queue_job(job_type, input_path):
         logger.error(f"File not found: {input_path}")
         return None, "File not found"
 
-    # Check if already in history or queue
-    history_keys = r.keys(f"{config.HISTORY_PREFIX}*")
-    for key in history_keys:
-        hist = r.hgetall(key)
-        if hist.get('input_path') == input_path and hist.get('status') not in ['failed']:
-            return hist.get('job_id'), "Job already exists"
+    # Check if already in history or queue using path index
+    existing_job_id = r.get(f"{config.PATH_INDEX_PREFIX}{input_path}")
+    if existing_job_id:
+        hist = r.hgetall(f"{config.HISTORY_PREFIX}{existing_job_id}")
+        if hist and hist.get('status') not in ['failed']:
+            return existing_job_id, "Job already exists"
+
+    # Generate a clean title from filename
+    filename = os.path.basename(input_path)
+    title = os.path.splitext(filename)[0].replace('_', ' ').replace('.', ' ')
 
     job_id = str(uuid.uuid4())
     job_payload = {
         "job_id": job_id,
+        "title": title,
         "type": job_type,
         "input_path": input_path,
         "status": "queued",
         "queued_at": datetime.now().isoformat()
     }
     
-    # Store in history
+    # Store in history and path index
     r.hset(f"{config.HISTORY_PREFIX}{job_id}", mapping=job_payload)
+    r.set(f"{config.PATH_INDEX_PREFIX}{input_path}", job_id)
     
     # Push to queue
     r.rpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
+    
+    # Publish event to transcoder:events channel
+    event_payload = {
+        "event": "job_queued",
+        "job_id": job_id,
+        "type": job_type,
+        "input_path": input_path,
+        "timestamp": datetime.now().isoformat()
+    }
+    r.publish("transcoder:events", json.dumps(event_payload))
+    
     logger.info(f"Queued {job_type} job {job_id} for {input_path}")
     return job_id, None
 

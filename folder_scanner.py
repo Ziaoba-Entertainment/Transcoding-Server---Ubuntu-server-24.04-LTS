@@ -11,60 +11,41 @@ import time
 import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-
-# HARDCODED CREDENTIALS
-REDIS_HOST = "192.168.0.103"
-REDIS_PORT = 6379
-REDIS_PASSWORD = "TranscoderRedis2024!"
-
-# REDIS KEYS
-TRANSCODE_QUEUE = "transcode_queue"
-HISTORY_PREFIX = "job_history:"
-SKIPPED_FOLDERS = "skipped_folders"
-
-# DIRECTORIES
-SOURCE_BASE_MOVIES = "/srv/media_raw/movies"
-SOURCE_BASE_TV = "/srv/media_raw/tv"
-ARCHIVE_BASE_ADS = "/srv/vod/ads"
-LOG_DIR = "/var/log/transcoder"
-SCANNER_LOG = os.path.join(LOG_DIR, "scanner.log")
-
-# VIDEO EXTENSIONS
-VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.mov', '.m4v', '.ts')
-
-# VALID MOVIE FOLDER REGEX
-VALID_MOVIE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_]*_\(\d{4}\)$')
+import config
 
 # Setup logging
-if not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR, exist_ok=True)
+if not os.path.exists(config.LOG_DIR):
+    os.makedirs(config.LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(SCANNER_LOG),
+        logging.FileHandler(config.SCANNER_LOG),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD, decode_responses=True)
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, password=config.REDIS_PASSWORD, decode_responses=True)
+
+# VALID MOVIE FOLDER REGEX - More lenient to support spaces and common naming
+VALID_MOVIE_RE = re.compile(r'.* \(\d{4}\)$')
+SKIPPED_FOLDERS = "skipped_folders"
 
 def is_valid_movie_folder(folder_name):
     return bool(VALID_MOVIE_RE.match(folder_name))
 
 def is_already_processed(file_path):
-    # Check history
-    history_keys = r.keys(f"{HISTORY_PREFIX}*")
-    for key in history_keys:
-        hist = r.hgetall(key)
-        if hist.get('input_path') == file_path:
-            if hist.get('status') in ['completed', 'processing', 'queued', 'verifying', 'archiving']:
-                return True
+    # Check path index
+    existing_job_id = r.get(f"{config.PATH_INDEX_PREFIX}{file_path}")
+    if existing_job_id:
+        hist = r.hgetall(f"{config.HISTORY_PREFIX}{existing_job_id}")
+        if hist and hist.get('status') in ['completed', 'processing', 'queued', 'verifying', 'archiving']:
+            return True
     
-    # Check main queue
-    queue_items = r.lrange(TRANSCODE_QUEUE, 0, -1)
+    # Check main queue (fallback/safety)
+    queue_items = r.lrange(config.TRANSCODE_QUEUE, 0, -1)
     for item in queue_items:
         try:
             data = json.loads(item)
@@ -79,17 +60,85 @@ def queue_file(job_type, file_path, job_id=None):
     if not job_id:
         job_id = str(uuid.uuid4())
     
+    # Generate a clean title from filename
+    filename = os.path.basename(file_path)
+    title = os.path.splitext(filename)[0].replace('_', ' ').replace('.', ' ')
+    
     job_payload = {
         "job_id": job_id,
+        "title": title,
         "type": job_type,
         "input_path": file_path,
         "status": "queued",
         "queued_at": datetime.now().isoformat(),
         "priority": 5
     }
-    r.hset(f"{HISTORY_PREFIX}{job_id}", mapping=job_payload)
-    r.rpush(TRANSCODE_QUEUE, json.dumps(job_payload))
-    logger.info(f"Scanner queued {job_type}: {file_path}")
+    r.hset(f"{config.HISTORY_PREFIX}{job_id}", mapping=job_payload)
+    r.set(f"{config.PATH_INDEX_PREFIX}{file_path}", job_id)
+    
+    # Ads go to the FRONT of the queue for priority processing
+    if job_type == 'ad':
+        r.lpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
+    else:
+        r.rpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
+        
+    logger.info(f"Scanner queued {job_type}: {file_path} (Title: {title})")
+
+def verify_hls_package(output_dir):
+    """Checks if HLS package is complete with master.m3u8 and .ts files."""
+    try:
+        p = Path(output_dir)
+        if not p.exists(): return False
+        master = p / "master.m3u8"
+        if not master.exists(): return False
+        ts_files = list(p.glob("*.ts"))
+        if len(ts_files) < 1: return False
+        return True
+    except:
+        return False
+
+def cleanup_incomplete_outputs():
+    """Scans history for completed jobs and verifies their output. Requeues if broken."""
+    logger.info("Starting output cleanup scan...")
+    keys = r.keys(f"{config.HISTORY_PREFIX}*")
+    requeued_count = 0
+    
+    for key in keys:
+        data = r.hgetall(key)
+        if data.get("status") == "completed":
+            output_path = data.get("output_path")
+            if not output_path or not verify_hls_package(output_path):
+                job_id = key.split(":")[-1]
+                input_path = data.get("input_path")
+                job_type = data.get("type", "movie")
+                
+                if input_path and os.path.exists(input_path):
+                    logger.warning(f"Cleanup: Job {job_id} has incomplete output at {output_path}. Requeuing...")
+                    
+                    # Delete broken output if it exists
+                    if output_path and os.path.exists(output_path):
+                        try:
+                            import shutil
+                            shutil.rmtree(output_path)
+                        except Exception as e:
+                            logger.error(f"Failed to delete broken output {output_path}: {e}")
+                    
+                    # Remove from history to allow re-scan or manually requeue
+                    r.delete(key)
+                    r.delete(f"{config.PATH_INDEX_PREFIX}{input_path}")
+                    
+                    # Manually requeue now
+                    queue_file(job_type, input_path, job_id=job_id)
+                    requeued_count += 1
+                else:
+                    logger.error(f"Cleanup: Job {job_id} output broken and input missing. Marking as failed.")
+                    r.hset(key, "status", "failed")
+                    r.hset(key, "error", "Output incomplete and source file missing")
+
+    if requeued_count > 0:
+        logger.info(f"Cleanup complete. Requeued {requeued_count} jobs.")
+    else:
+        logger.info("Cleanup complete. No broken packages found.")
 
 class AdFolderHandler(FileSystemEventHandler):
     def on_created(self, event):
@@ -116,10 +165,10 @@ class AdFolderHandler(FileSystemEventHandler):
                 logger.error(f"Failed to process ad folder {ad_id}: {e}")
 
 def scan_ads():
-    if not os.path.exists(ARCHIVE_BASE_ADS): return
+    if not os.path.exists(config.OUTPUT_BASE_ADS): return
     logger.info("Scanning ads directory...")
-    for ad_id in os.listdir(ARCHIVE_BASE_ADS):
-        folder_path = os.path.join(ARCHIVE_BASE_ADS, ad_id)
+    for ad_id in os.listdir(config.OUTPUT_BASE_ADS):
+        folder_path = os.path.join(config.OUTPUT_BASE_ADS, ad_id)
         if os.path.isdir(folder_path):
             json_path = os.path.join(folder_path, f"{ad_id}.json")
             if os.path.exists(json_path):
@@ -134,10 +183,13 @@ def scan_ads():
 def scan():
     logger.info("Starting folder scan...")
     
-    # Scan Movies
-    if os.path.exists(SOURCE_BASE_MOVIES):
-        for folder in os.listdir(SOURCE_BASE_MOVIES):
-            folder_path = os.path.join(SOURCE_BASE_MOVIES, folder)
+    # 1. Cleanup broken outputs first
+    cleanup_incomplete_outputs()
+    
+    # 2. Scan Movies
+    if os.path.exists(config.SOURCE_BASE_MOVIES):
+        for folder in os.listdir(config.SOURCE_BASE_MOVIES):
+            folder_path = os.path.join(config.SOURCE_BASE_MOVIES, folder)
             if os.path.isdir(folder_path):
                 if not is_valid_movie_folder(folder):
                     logger.warning(f"Skipping invalid movie folder: {folder}")
@@ -147,16 +199,16 @@ def scan():
                 # Valid folder, scan for files
                 for root, _, files in os.walk(folder_path):
                     for file in files:
-                        if file.lower().endswith(VIDEO_EXTENSIONS):
+                        if file.lower().endswith(config.VIDEO_EXTENSIONS):
                             full_path = os.path.join(root, file)
                             if not is_already_processed(full_path):
                                 queue_file('movie', full_path)
 
     # Scan TV
-    if os.path.exists(SOURCE_BASE_TV):
-        for root, _, files in os.walk(SOURCE_BASE_TV):
+    if os.path.exists(config.SOURCE_BASE_TV):
+        for root, _, files in os.walk(config.SOURCE_BASE_TV):
             for file in files:
-                if file.lower().endswith(VIDEO_EXTENSIONS):
+                if file.lower().endswith(config.VIDEO_EXTENSIONS):
                     full_path = os.path.join(root, file)
                     if not is_already_processed(full_path):
                         queue_file('tv', full_path)
@@ -176,10 +228,10 @@ if __name__ == "__main__":
         scan()
     elif args.daemon:
         observer = Observer()
-        if os.path.exists(ARCHIVE_BASE_ADS):
-            observer.schedule(AdFolderHandler(), ARCHIVE_BASE_ADS, recursive=False)
+        if os.path.exists(config.OUTPUT_BASE_ADS):
+            observer.schedule(AdFolderHandler(), config.OUTPUT_BASE_ADS, recursive=False)
             observer.start()
-            logger.info(f"Ads Watchdog started on {ARCHIVE_BASE_ADS}")
+            logger.info(f"Ads Watchdog started on {config.OUTPUT_BASE_ADS}")
 
         try:
             while True:

@@ -11,27 +11,7 @@ import redis
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-
-# --- CONFIGURATION ---
-REDIS_HOST = "192.168.0.103"
-REDIS_PORT = 6379
-REDIS_PASSWORD = "TranscoderRedis2024!"
-
-# Queues
-INCOMING_QUEUE = "transcode_queue"
-LOCAL_QUEUE = "local_transcode_queue"
-WINDOWS_QUEUE = "windows_transcode_queue"
-
-# Paths
-VOD_BASE = "/srv/vod/hls"
-ADS_BASE = "/srv/vod/ads"
-ADS_DOWNLOADS = "/srv/downloads/ads"
-LOG_DIR = "/var/log/transcoder"
-
-# Prefixes
-HISTORY_PREFIX = "job_history:"
-AD_META_PREFIX = "ad_meta:"
-AD_PLAYS_PREFIX = "ad_plays:"
+import config
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20GB
@@ -40,12 +20,29 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+@app.before_request
+def log_request_info():
+    logger.info('Request: %s %s', request.method, request.path)
+
 def get_redis():
     """Helper to get a thread-safe, decoded Redis connection with timeouts."""
     return redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        password=REDIS_PASSWORD,
+        host=config.REDIS_HOST,
+        port=config.REDIS_PORT,
+        db=config.REDIS_DB,
+        password=config.REDIS_PASSWORD,
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=5
+    )
+
+def get_redis_ads():
+    """Helper to get a thread-safe, decoded Redis connection for Ads (DB 1)."""
+    return redis.Redis(
+        host=config.REDIS_HOST,
+        port=config.REDIS_PORT,
+        db=config.REDIS_DB_ADS,
+        password=config.REDIS_PASSWORD,
         decode_responses=True,
         socket_connect_timeout=5,
         socket_timeout=5
@@ -87,10 +84,7 @@ def verify_hls_output(output_dir):
 # --- PAGE ROUTES ---
 
 @app.route('/')
-@app.route('/transcoder/')
 def index():
-    # We'll serve the dashboard.html from the templates folder
-    # If it doesn't exist, we'll fall back to a basic string or search for it
     return render_template('dashboard.html')
 
 # --- API QUEUE ENDPOINTS ---
@@ -100,9 +94,9 @@ def get_queue_status():
     try:
         r = get_redis()
         queues = {
-            "transcode_queue": [],
-            "local_transcode_queue": [],
-            "windows_transcode_queue": []
+            config.TRANSCODE_QUEUE: [],
+            config.LOCAL_QUEUE: [],
+            config.WINDOWS_QUEUE: []
         }
         
         for q_name in queues.keys():
@@ -118,18 +112,42 @@ def get_queue_status():
                     "pos": i + 1,
                     "filename": os.path.basename(data.get("input_path", "unknown")),
                     "type": data.get("type", "movie"),
-                    "worker": "Pending Routing" if q_name == INCOMING_QUEUE else ("Local (VAAPI)" if q_name == LOCAL_QUEUE else "Windows (NVENC)"),
+                    "worker": "Pending Routing" if q_name == config.TRANSCODE_QUEUE else ("Local (VAAPI)" if q_name == config.LOCAL_QUEUE else "Windows (NVENC)"),
                     "queued_at": data.get("queued_at", "Unknown"),
                     "priority": data.get("priority", 0)
                 })
 
+        active_job = None
+        active_raw = r.get(config.ACTIVE_JOB_KEY)
+        if active_raw:
+            try:
+                active_job = json.loads(active_raw)
+                active_job['filename'] = os.path.basename(active_job.get('input_path', 'unknown'))
+                active_job['worker_type'] = 'local'
+            except: pass
+
+        win_active_job = None
+        win_active_raw = r.get(config.WIN_ACTIVE_JOB_KEY)
+        if win_active_raw:
+            try:
+                win_active_job = json.loads(win_active_raw)
+                win_active_job['filename'] = os.path.basename(win_active_job.get('input_path', 'unknown'))
+                win_active_job['worker_type'] = 'windows'
+            except: pass
+
         summary = {
-            "incoming": len(queues[INCOMING_QUEUE]),
-            "local": len(queues[LOCAL_QUEUE]),
-            "windows": len(queues[WINDOWS_QUEUE]),
-            "total": sum(len(v) for v in queues.values())
+            "incoming": len(queues[config.TRANSCODE_QUEUE]),
+            "local": len(queues[config.LOCAL_QUEUE]),
+            "windows": len(queues[config.WINDOWS_QUEUE]),
+            "total": sum(len(v) for v in queues.values()),
+            "active": (1 if active_job else 0) + (1 if win_active_job else 0)
         }
-        return jsonify({"queues": queues, "summary": summary})
+        return jsonify({
+            "queues": queues, 
+            "summary": summary, 
+            "active_job": active_job,
+            "win_active_job": win_active_job
+        })
     except redis.RedisError as e:
         logger.error(f"Redis Error: {e}")
         return jsonify({"error": "Redis unavailable"}), 503
@@ -139,7 +157,7 @@ def remove_job(job_id):
     try:
         r = get_redis()
         removed = False
-        for q in [INCOMING_QUEUE, LOCAL_QUEUE, WINDOWS_QUEUE]:
+        for q in [config.TRANSCODE_QUEUE, config.LOCAL_QUEUE, config.WINDOWS_QUEUE]:
             items = r.lrange(q, 0, -1)
             for item in items:
                 if job_id in item:
@@ -149,24 +167,65 @@ def remove_job(job_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/queue/move', methods=['POST'])
+def move_job():
+    try:
+        r = get_redis()
+        data = request.json
+        job_id = data.get("job_id")
+        target = data.get("target") # 'local' or 'windows'
+        
+        if not job_id or not target:
+            return jsonify({"error": "Missing job_id or target"}), 400
+            
+        # Find and remove from any queue
+        found_job = None
+        for q in [config.TRANSCODE_QUEUE, config.LOCAL_QUEUE, config.WINDOWS_QUEUE]:
+            items = r.lrange(q, 0, -1)
+            for item in items:
+                if job_id in item:
+                    r.lrem(q, 0, item)
+                    found_job = json.loads(item)
+                    break
+            if found_job: break
+            
+        if not found_job:
+            return jsonify({"error": "Job not found in any queue"}), 404
+            
+        # Update force_worker and push to target
+        found_job["force_worker"] = target
+        target_queue = config.LOCAL_QUEUE if target == 'local' else config.WINDOWS_QUEUE
+        
+        # Push to FRONT of target queue for manual priority
+        r.lpush(target_queue, json.dumps(found_job))
+        
+        return jsonify({
+            "status": "ok",
+            "job_id": job_id,
+            "target": target,
+            "message": f"Job manually routed to {target}"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/queue/rebalance', methods=['POST'])
 def rebalance_queue():
     try:
         r = get_redis()
-        if not r.exists("worker:windows:heartbeat"):
+        if not r.exists(config.WIN_HEARTBEAT_KEY):
             return jsonify({"error": "Windows worker offline"}), 400
         
         moved = 0
         for _ in range(10):
-            job = r.rpop(LOCAL_QUEUE)
+            job = r.rpop(config.LOCAL_QUEUE)
             if not job: break
-            r.lpush(WINDOWS_QUEUE, job)
+            r.lpush(config.WINDOWS_QUEUE, job)
             moved += 1
             
         return jsonify({
             "moved": moved,
-            "windows_queue_depth": r.llen(WINDOWS_QUEUE),
-            "local_queue_depth": r.llen(LOCAL_QUEUE)
+            "windows_queue_depth": r.llen(config.WINDOWS_QUEUE),
+            "local_queue_depth": r.llen(config.LOCAL_QUEUE)
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -177,51 +236,126 @@ def rebalance_queue():
 def get_completed_jobs():
     try:
         r = get_redis()
-        keys = r.keys(f"{HISTORY_PREFIX}*")
+        # Optimization: Only fetch the most recent 100 jobs to speed up loading
+        keys = r.keys(f"{config.HISTORY_PREFIX}*")
+        
+        # Sort keys by timestamp if possible, or just limit
+        # Redis keys are not sorted. We'll fetch all but optimize the loop.
+        
         jobs = []
         for key in keys:
             data = r.hgetall(key)
             job_id = key.split(":")[-1]
+            job_type = data.get("type", "movie")
             
             status = data.get("status", "unknown")
+            input_path = data.get("input_path")
             output_path = data.get("output_path")
             
-            hls_verified = False
-            v_label = "Unknown"
-            if status == "completed" and output_path:
-                hls_verified, v_label, _ = verify_hls_output(output_path)
-            elif status == "failed":
-                v_label = "Failed"
+            # Reconstruct output_path if missing for completed jobs
+            if not output_path and status == "completed" and input_path:
+                try:
+                    output_path = config.get_output_dir(job_type, input_path, job_id=job_id)
+                    # Save it back to Redis for future requests
+                    r.hset(key, "output_path", output_path)
+                except Exception as e:
+                    logger.error(f"Failed to reconstruct output_path for {job_id}: {e}")
+
+            # Title fallback - be aggressive
+            title = data.get("title")
+            if not title or title == "Unknown" or title == "unknown":
+                if input_path:
+                    filename = os.path.basename(input_path)
+                    title = os.path.splitext(filename)[0].replace('_', ' ').replace('.', ' ')
+                else:
+                    title = f"Job {job_id}"
+
+            # Optimization: Cache verification status in Redis to avoid disk I/O on every request
+            hls_verified = data.get("hls_verified") == "True"
+            v_label = data.get("verification_label")
+            
+            if not v_label:
+                if status == "completed" and output_path:
+                    hls_verified, v_label, _ = verify_hls_output(output_path)
+                    # Cache it back to Redis
+                    r.hset(key, mapping={
+                        "hls_verified": str(hls_verified),
+                        "verification_label": v_label
+                    })
+                elif status == "failed":
+                    v_label = "Failed"
+                elif status == "processing":
+                    v_label = "Processing"
+                else:
+                    v_label = status.capitalize()
 
             # Calculate duration
             duration = 0
-            if "started_at" in data and "completed_at" in data:
+            started_at = data.get("started_at") or data.get("start_time")
+            completed_at = data.get("completed_at") or data.get("end_time")
+            
+            if started_at and completed_at:
                 try:
-                    start = datetime.fromisoformat(data["started_at"])
-                    end = datetime.fromisoformat(data["completed_at"])
+                    start = datetime.fromisoformat(started_at)
+                    end = datetime.fromisoformat(completed_at)
                     duration = round((end - start).total_seconds() / 60)
                 except: pass
 
+            # Generate URLs
+            vod_url = None
+            stitched_url = None
+            
+            if status == "completed":
+                # Ensure we have an output_path for URL generation
+                current_output_path = output_path
+                if not current_output_path and input_path:
+                    current_output_path = config.get_output_dir(job_type, input_path, job_id=job_id)
+
+                if current_output_path:
+                    if job_type == "ad":
+                        # Ads: http://192.168.0.103:8081/ads/advert0004/master.m3u8
+                        rel_path = os.path.relpath(current_output_path, config.OUTPUT_BASE_ADS)
+                        vod_url = f"http://192.168.0.103:8081/ads/{rel_path}/master.m3u8"
+                    else:
+                        # Movies/TV: http://192.168.0.103:8081/vod/hls/movies/.../master.m3u8
+                        # Relative to /srv/vod/ as per Nginx alias /srv/vod/
+                        rel_path = os.path.relpath(current_output_path, "/srv/vod")
+                        vod_url = f"http://192.168.0.103:8081/vod/{rel_path}/master.m3u8"
+                        
+                        # Stitched URL: https://stream.ziaoba.com/playlist/hls/movies/.../master.m3u8
+                        if job_type in ["movie", "tv"]:
+                            stitched_url = f"https://stream.ziaoba.com/playlist/{rel_path}/master.m3u8"
+
             jobs.append({
                 "job_id": job_id,
-                "title": data.get("title", "Unknown"),
+                "title": title,
                 "filename": os.path.basename(data.get("input_path", "unknown")),
-                "type": data.get("type", "movie"),
+                "type": job_type,
                 "status": status,
                 "worker": data.get("worker", "unknown"),
                 "queued_at": data.get("queued_at"),
-                "completed_at": data.get("completed_at"),
+                "completed_at": completed_at,
                 "duration_minutes": duration,
-                "hls_url": f"http://192.168.0.103/hls/{data.get('type')}s/{os.path.basename(os.path.dirname(output_path or ''))}/master.m3u8" if output_path else None,
+                "vod_url": vod_url,
+                "stitched_url": stitched_url,
+                "hls_url": stitched_url, # Keep for backward compatibility if needed
                 "hls_verified": hls_verified,
                 "verification_label": v_label
             })
         
-        # Sort by completed_at desc
-        jobs.sort(key=lambda x: x.get('completed_at', ''), reverse=True)
-        return jsonify({"jobs": jobs, "total": len(jobs)})
+        # Sort by completed_at desc and limit to 100 for performance
+        jobs.sort(key=lambda x: x.get('completed_at', '') or '', reverse=True)
+        return jsonify({"jobs": jobs[:100], "total": len(jobs)})
     except Exception as e:
         logger.error(f"Error fetching history: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/scanner/scan', methods=['POST'])
+def trigger_scan():
+    try:
+        subprocess.Popen(["sudo", "systemctl", "start", "transcoder-scanner.service"])
+        return jsonify({"status": "Scanner triggered"})
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # --- API ADVERTISEMENT ENDPOINTS ---
@@ -230,6 +364,7 @@ def get_completed_jobs():
 def upload_ad():
     try:
         r = get_redis()
+        r_ads = get_redis_ads()
         if 'file' not in request.files:
             return jsonify({"error": "No file part"}), 400
         
@@ -242,8 +377,8 @@ def upload_ad():
         if not description or not advertiser_name:
             return jsonify({"error": "Missing required fields: description or advertiser_name"}), 400
 
-        ad_id = f"advert{r.zcard('ad_registry') + 1:04d}"
-        upload_dir = os.path.join(ADS_DOWNLOADS, ad_id)
+        ad_id = f"advert{r_ads.zcard(config.AD_REGISTRY_KEY) + 1:04d}"
+        upload_dir = os.path.join(config.ARCHIVE_BASE_ADS, ad_id)
         os.makedirs(upload_dir, exist_ok=True)
 
         filename = secure_filename(file.filename)
@@ -263,14 +398,13 @@ def upload_ad():
             "status": "queued"
         }
 
-        # Save to Redis
-        r.hset(f"ad_meta:{ad_id}", mapping=meta)
-        r.zadd("ad_registry", {ad_id: meta['upload_timestamp']})
-        r.zadd("advertiser:index", {advertiser_name: 0})
-        r.set(f"ad_processing:{ad_id}", "queued")
-        r.set(f"ad_plays:{ad_id}", 0)
+        # Save to Redis Ads DB
+        r_ads.hset(f"{config.AD_META_PREFIX}{ad_id}", mapping=meta)
+        r_ads.zadd(config.AD_REGISTRY_KEY, {ad_id: meta['upload_timestamp']})
+        r_ads.zadd(config.ADVERTISER_INDEX_KEY, {advertiser_name: 0})
+        r_ads.set(f"ad_plays:{ad_id}", 0)
 
-        # Queue job with HIGH priority
+        # Queue job with MAX priority in Main DB
         job_id = ad_id
         job_payload = {
             "job_id": job_id,
@@ -281,15 +415,15 @@ def upload_ad():
             "status": "queued",
             "queued_at": datetime.now().isoformat()
         }
-        r.hset(f"{HISTORY_PREFIX}{job_id}", mapping=job_payload)
-        # Push to FRONT of local queue for immediate processing
-        r.lpush(LOCAL_QUEUE, json.dumps(job_payload))
+        r.hset(f"{config.HISTORY_PREFIX}{job_id}", mapping=job_payload)
+        # Push to FRONT of main queue for immediate routing
+        r.lpush(config.TRANSCODE_QUEUE, json.dumps(job_payload))
 
         return jsonify({
             "ad_id": ad_id,
             "status": "queued",
             "message": "Ad uploaded and queued for transcoding",
-            "hls_url": f"http://192.168.0.103/ads/{ad_id}/master.m3u8",
+            "hls_url": f"http://192.168.0.103/playlist/ad/{ad_id}/master.m3u8",
             "estimated_ready_minutes": 5
         })
 
@@ -300,15 +434,15 @@ def upload_ad():
 @app.route('/api/ads')
 def list_ads():
     try:
-        r = get_redis()
-        ad_ids = r.zrange("ad_registry", 0, -1)
+        r_ads = get_redis_ads()
+        ad_ids = r_ads.zrange(config.AD_REGISTRY_KEY, 0, -1)
         ads = []
         for ad_id in ad_ids:
-            meta = r.hgetall(f"{AD_META_PREFIX}{ad_id}")
-            plays = int(r.get(f"{AD_PLAYS_PREFIX}{ad_id}") or 0)
+            meta = r_ads.hgetall(f"{config.AD_META_PREFIX}{ad_id}")
+            plays = int(r_ads.get(f"{config.AD_PLAYS_PREFIX}{ad_id}") or 0)
             max_p = int(meta.get("max_plays", 0))
             
-            hls_path = os.path.join(ADS_BASE, ad_id)
+            hls_path = os.path.join(config.OUTPUT_BASE_ADS, ad_id)
             hls_ready, _, _ = verify_hls_output(hls_path)
             
             ads.append({
@@ -316,11 +450,11 @@ def list_ads():
                 "description": meta.get("description"),
                 "advertiser_name": meta.get("advertiser_name"),
                 "campaign_name": meta.get("campaign_name"),
-                "hls_url": f"http://192.168.0.103/ads/{ad_id}/master.m3u8",
+                "hls_url": f"http://192.168.0.103/playlist/ad/{ad_id}/master.m3u8",
                 "hls_ready": hls_ready,
                 "max_plays": max_p,
                 "current_plays": plays,
-                "enabled": ad_id not in r.smembers("ads:disabled"),
+                "enabled": ad_id not in r_ads.smembers(config.ADS_DISABLED_KEY),
                 "exhausted": (plays >= max_p) if max_p > 0 else False,
                 "upload_timestamp": float(meta.get("upload_timestamp", 0))
             })
@@ -331,24 +465,31 @@ def list_ads():
 @app.route('/api/ad/<ad_id>', methods=['PATCH'])
 def update_ad(ad_id):
     try:
-        r = get_redis()
+        r_ads = get_redis_ads()
         data = request.json
-        meta_key = f"{AD_META_PREFIX}{ad_id}"
+        meta_key = f"{config.AD_META_PREFIX}{ad_id}"
         
-        if not r.exists(meta_key):
+        if not r_ads.exists(meta_key):
             return jsonify({"error": "Ad not found"}), 404
             
         allowed = ["description", "advertiser_name", "campaign_name", "max_plays"]
         updates = {k: v for k, v in data.items() if k in allowed}
+        
+        if "max_plays" in updates:
+            try:
+                updates["max_plays"] = int(updates["max_plays"])
+            except:
+                updates["max_plays"] = 0
+
         if updates:
-            r.hset(meta_key, mapping=updates)
+            r_ads.hset(meta_key, mapping=updates)
             
         if "enabled" in data:
-            if data["enabled"]: r.srem("ads:disabled", ad_id)
-            else: r.sadd("ads:disabled", ad_id)
+            if data["enabled"]: r_ads.srem(config.ADS_DISABLED_KEY, ad_id)
+            else: r_ads.sadd(config.ADS_DISABLED_KEY, ad_id)
 
         # Update JSON file
-        json_path = os.path.join(ADS_DOWNLOADS, ad_id, f"{ad_id}.json")
+        json_path = os.path.join(config.ARCHIVE_BASE_ADS, ad_id, f"{ad_id}.json")
         if os.path.exists(json_path):
             with open(json_path, 'r') as f:
                 file_data = json.load(f)
@@ -363,17 +504,17 @@ def update_ad(ad_id):
 @app.route('/api/ad/<ad_id>/play', methods=['POST'])
 def record_play(ad_id):
     try:
-        r = get_redis()
-        meta = r.hgetall(f"{AD_META_PREFIX}{ad_id}")
+        r_ads = get_redis_ads()
+        meta = r_ads.hgetall(f"{config.AD_META_PREFIX}{ad_id}")
         if not meta: return jsonify({"error": "Not found"}), 404
         
-        plays = r.incr(f"{AD_PLAYS_PREFIX}{ad_id}")
+        plays = r_ads.incr(f"{config.AD_PLAYS_PREFIX}{ad_id}")
         max_p = int(meta.get("max_plays", 0))
         
         exhausted = False
         if max_p > 0 and plays >= max_p:
             exhausted = True
-            r.sadd("ads:disabled", ad_id)
+            r_ads.sadd(config.ADS_DISABLED_KEY, ad_id)
             
         return jsonify({"ad_id": ad_id, "plays": plays, "exhausted": exhausted})
     except Exception as e:
@@ -408,8 +549,8 @@ def system_status():
             {"name": "Webhook Receiver",    "unit": "transcoder-webhook.service"},
             {"name": "Job Router",          "unit": "transcoder-router.service"},
             {"name": "Local Worker",        "unit": "transcoder-worker.service"},
-            {"name": "Ad Stitching Server", "unit": "transcoder-ad-stitcher.service"},
-            {"name": "Ad Admin Panel",      "unit": "transcoder-ad-admin.service"},
+            {"name": "Scanner",             "unit": "transcoder-scanner.service"},
+            {"name": "Win Watcher",         "unit": "transcoder-win-watcher.service"},
             {"name": "Nginx Proxy",         "unit": "nginx.service"}
         ]
         
@@ -420,20 +561,27 @@ def system_status():
             results.append(s)
             
         # Windows Worker
-        ttl = r.ttl("worker:windows:heartbeat")
+        ttl = r.ttl(config.WIN_HEARTBEAT_KEY)
         win_status = {"status": "offline", "display": "Offline", "colour": "red"}
-        if ttl > 0:
-            hb = json.loads(r.get("worker:windows:heartbeat") or "{}")
+        if ttl > 0 or ttl == -1:
+            hb_raw = r.get(config.WIN_HEARTBEAT_KEY)
+            hb = {}
+            if hb_raw:
+                try:
+                    hb = json.loads(hb_raw)
+                except: pass
+                
             win_status = {
                 "status": "online",
                 "display": "Online",
                 "colour": "green",
                 "ttl": ttl,
-                "hostname": hb.get("hostname"),
-                "ip": hb.get("ip"),
-                "last_seen_seconds": int(time.time() - hb.get("timestamp_unix", time.time())),
-                "queue_depth": r.llen(WINDOWS_QUEUE),
-                "warning": ttl < 25
+                "hostname": hb.get("hostname", "Unknown"),
+                "ip": hb.get("ip", "Unknown"),
+                "last_seen_seconds": int(time.time() - hb.get("timestamp_unix", time.time())) if hb.get("timestamp_unix") else 0,
+                "queue_depth": r.llen(config.WINDOWS_QUEUE),
+                "warning": ttl < 25 and ttl != -1,
+                "gpus": hb.get("gpus", [])
             }
             
         return jsonify({
@@ -461,22 +609,18 @@ def restart_service(unit_name):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/transcoder/stream')
+@app.route('/stream')
 def stream_logs():
     def generate():
-        log_path = "/var/log/transcoder/worker.log"
-        if not os.path.exists(log_path):
-            yield "data: Log file not found\n\n"
-            return
+        r = get_redis()
+        pubsub = r.pubsub()
+        pubsub.subscribe(config.LOCAL_LOG_CHANNEL, config.WIN_LOG_CHANNEL)
         
-        with open(log_path, "r") as f:
-            f.seek(0, 2) # Go to end
-            while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                yield f"data: {line}\n\n"
+        while True:
+            message = pubsub.get_message(ignore_subscribe_messages=True)
+            if message:
+                yield f"data: {message['data']}\n\n"
+            time.sleep(0.1)
     return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':

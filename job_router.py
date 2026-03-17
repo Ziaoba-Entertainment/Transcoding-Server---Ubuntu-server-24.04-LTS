@@ -3,18 +3,7 @@ import json
 import time
 import logging
 from datetime import datetime
-
-# HARDCODED CREDENTIALS
-REDIS_HOST = "192.168.0.103"
-REDIS_PORT = 6379
-REDIS_PASSWORD = "TranscoderRedis2024!"
-
-# REDIS KEYS
-TRANSCODE_QUEUE = "transcode_queue"
-LOCAL_QUEUE = "local_transcode_queue"
-WINDOWS_QUEUE = "windows_transcode_queue"
-WIN_HEARTBEAT_KEY = "worker:windows:heartbeat"
-ROUTER_STATUS_KEY = "router:status"
+import config
 
 # Setup logging
 logging.basicConfig(
@@ -29,9 +18,9 @@ def get_redis_client():
     while True:
         try:
             r = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                password=REDIS_PASSWORD,
+                host=config.REDIS_HOST,
+                port=config.REDIS_PORT,
+                password=config.REDIS_PASSWORD,
                 decode_responses=True,
                 socket_timeout=5,
                 socket_connect_timeout=5
@@ -46,13 +35,13 @@ def get_redis_client():
 def update_router_status(r):
     try:
         status = {
-            "windows_online": str(r.exists(WIN_HEARTBEAT_KEY)).lower(),
-            "local_queue_depth": r.llen(LOCAL_QUEUE),
-            "windows_queue_depth": r.llen(WINDOWS_QUEUE),
-            "transcode_queue_depth": r.llen(TRANSCODE_QUEUE),
+            "windows_online": str(r.exists(config.WIN_HEARTBEAT_KEY)).lower(),
+            "local_queue_depth": r.llen(config.LOCAL_QUEUE),
+            "windows_queue_depth": r.llen(config.WINDOWS_QUEUE),
+            "transcode_queue_depth": r.llen(config.TRANSCODE_QUEUE),
             "updated_at": datetime.now().isoformat()
         }
-        r.hset(ROUTER_STATUS_KEY, mapping=status)
+        r.hset(config.ROUTER_STATUS_KEY, mapping=status)
     except Exception as e:
         logger.error(f"Failed to update router status: {e}")
 
@@ -65,33 +54,43 @@ def route_job(r, job):
         
         # 1. Handle explicit worker override
         if force_worker == "windows":
-            r.rpush(WINDOWS_QUEUE, json.dumps(job))
+            r.rpush(config.WINDOWS_QUEUE, json.dumps(job))
             logger.info(f"FORCE WINDOWS: job {job_id} pushed to windows_transcode_queue")
             return
         elif force_worker == "local":
-            r.rpush(LOCAL_QUEUE, json.dumps(job))
+            r.rpush(config.LOCAL_QUEUE, json.dumps(job))
             logger.info(f"FORCE LOCAL: job {job_id} pushed to local_transcode_queue")
             return
 
         # 2. Standard Routing Logic
         is_ad = job_type == "ad" or priority >= 8
-        windows_online = r.exists(WIN_HEARTBEAT_KEY)
+        windows_online = r.exists(config.WIN_HEARTBEAT_KEY)
 
         if is_ad:
             # Ads always go to LOCAL queue at FRONT for fastest processing
-            r.lpush(LOCAL_QUEUE, json.dumps(job))
+            r.lpush(config.LOCAL_QUEUE, json.dumps(job))
             logger.info(f"AD PRIORITY: job {job_id} pushed to FRONT of local queue")
         elif windows_online:
-            r.rpush(WINDOWS_QUEUE, json.dumps(job))
-            logger.info(f"Routing job {job_id} [{job_type}] to windows_transcode_queue")
+            # Check if Windows worker is already busy or has a deep queue
+            # We allow up to 3 jobs in the windows queue to keep it "loaded"
+            win_queue_depth = r.llen(config.WINDOWS_QUEUE)
+            is_busy = r.exists(config.WIN_ACTIVE_JOB_KEY)
+            
+            if is_busy and win_queue_depth >= 2:
+                # If busy AND already has 2+ jobs waiting (total 3+), route to local
+                r.rpush(config.LOCAL_QUEUE, json.dumps(job))
+                logger.info(f"WINDOWS LOADED ({win_queue_depth} waiting): Routing job {job_id} to local_transcode_queue")
+            else:
+                r.rpush(config.WINDOWS_QUEUE, json.dumps(job))
+                logger.info(f"Routing job {job_id} [{job_type}] to windows_transcode_queue (Depth: {win_queue_depth})")
         else:
-            r.rpush(LOCAL_QUEUE, json.dumps(job))
+            r.rpush(config.LOCAL_QUEUE, json.dumps(job))
             logger.info(f"Routing job {job_id} [{job_type}] to local_transcode_queue (windows offline)")
             
     except Exception as e:
         logger.error(f"Error routing job: {e}")
         # If routing fails, try to put it back in the main queue
-        r.rpush(TRANSCODE_QUEUE, json.dumps(job))
+        r.rpush(config.TRANSCODE_QUEUE, json.dumps(job))
 
 def main():
     logger.info("Job Router starting...")
@@ -106,7 +105,7 @@ def main():
                 last_status_update = time.time()
                 
             # Wait for jobs in the main queue
-            job_raw = r.blpop(TRANSCODE_QUEUE, timeout=2)
+            job_raw = r.blpop(config.TRANSCODE_QUEUE, timeout=2)
             if job_raw:
                 try:
                     job = json.loads(job_raw[1])

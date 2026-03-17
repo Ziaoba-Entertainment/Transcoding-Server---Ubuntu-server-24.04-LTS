@@ -11,19 +11,34 @@ import redis
 from datetime import datetime
 import config
 
+# Redis Log Handler
+class RedisHandler(logging.Handler):
+    def __init__(self, redis_client, channel):
+        super().__init__()
+        self.redis_client = redis_client
+        self.channel = channel
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.redis_client.publish(self.channel, msg)
+        except Exception:
+            self.handleError(record)
+
 # Setup logging
+r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
+r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB_ADS, password=config.REDIS_PASSWORD, decode_responses=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.FileHandler(config.WORKER_LOG),
-        logging.StreamHandler()
+        logging.StreamHandler(),
+        RedisHandler(r, config.LOCAL_LOG_CHANNEL)
     ]
 )
 logger = logging.getLogger(__name__)
-
-r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB, password=config.REDIS_PASSWORD, decode_responses=True)
-r_ads = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, db=config.REDIS_DB_ADS, password=config.REDIS_PASSWORD, decode_responses=True)
 
 class TranscoderWorker:
     def __init__(self):
@@ -35,28 +50,6 @@ class TranscoderWorker:
         logger.info("Received termination signal. Finishing current job...")
         self.running = False
 
-    def sanitize_path(self, path_segment):
-        sanitized = re.sub(r'[^\w\s\-\(\).]', '', path_segment)
-        sanitized = sanitized.replace(' ', '_')
-        return sanitized
-
-    def get_output_dir(self, job_type, input_path, job_id=None):
-        if job_type == 'ad':
-            return os.path.join(config.OUTPUT_BASE_ADS, job_id)
-            
-        base_source = config.SOURCE_BASE_MOVIES if job_type == 'movie' else config.SOURCE_BASE_TV
-        base_output = config.OUTPUT_BASE_MOVIES if job_type == 'movie' else config.OUTPUT_BASE_TV
-        
-        rel_path = os.path.relpath(input_path, base_source)
-        path_parts = rel_path.split(os.sep)
-        sanitized_parts = [self.sanitize_path(p) for p in path_parts[:-1]]
-        
-        if job_type == 'tv':
-            filename = os.path.splitext(path_parts[-1])[0]
-            sanitized_parts.append(self.sanitize_path(filename))
-        
-        return os.path.join(base_output, *sanitized_parts)
-
     def update_job_status(self, job_id, status, error=None, progress=0, job_type=None):
         history_key = f"{config.HISTORY_PREFIX}{job_id}"
         data = {
@@ -67,10 +60,25 @@ class TranscoderWorker:
         }
         if error:
             data["error"] = error
+        if status == "processing":
+            # Only set started_at if it's not already there
+            if not r.hexists(history_key, "started_at"):
+                data["started_at"] = datetime.now().isoformat()
         if status == "completed":
-            data["end_time"] = datetime.now().isoformat()
+            data["completed_at"] = datetime.now().isoformat()
             
         r.hset(history_key, mapping=data)
+        
+        # Publish event to transcoder:events channel
+        event_payload = {
+            "event": f"transcoding_{status}",
+            "job_id": job_id,
+            "type": job_type,
+            "timestamp": datetime.now().isoformat()
+        }
+        if error:
+            event_payload["error"] = error
+        r.publish("transcoder:events", json.dumps(event_payload))
         
         # If it's an ad, also update the metadata JSON and DB 1
         if job_type == 'ad':
@@ -200,8 +208,9 @@ class TranscoderWorker:
         input_path = job_data['input_path']
         
         try:
+            output_dir = config.get_output_dir(job_type, input_path, job_id=job_id)
             self.update_job_status(job_id, "processing", job_type=job_type)
-            output_dir = self.get_output_dir(job_type, input_path, job_id=job_id)
+            r.hset(f"{config.HISTORY_PREFIX}{job_id}", "output_path", output_dir)
             
             self.run_ffmpeg(job_id, input_path, output_dir, job_type)
             

@@ -58,8 +58,14 @@ def requeue_failed_jobs():
                 continue
 
             # Re-queue
+            title = hist.get('title')
+            if not title:
+                filename = os.path.basename(input_path)
+                title = os.path.splitext(filename)[0].replace('_', ' ').replace('.', ' ')
+
             job_payload = {
                 "job_id": job_id,
+                "title": title,
                 "type": job_type,
                 "input_path": input_path,
                 "status": "queued",
@@ -69,6 +75,7 @@ def requeue_failed_jobs():
             # Update history status back to queued
             r.hset(key, mapping={
                 "status": "queued",
+                "title": title,
                 "queued_at": job_payload["queued_at"],
                 "error": "" # Clear previous error
             })

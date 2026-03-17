@@ -22,6 +22,8 @@ WORKER_LOG = os.path.join(LOG_DIR, "worker.log")
 WEBHOOK_LOG = os.path.join(LOG_DIR, "webhook.log")
 SCANNER_LOG = os.path.join(LOG_DIR, "scanner.log")
 WEBUI_LOG = os.path.join(LOG_DIR, "webui.log")
+WIN_LOG_CHANNEL = "logs:windows"
+LOCAL_LOG_CHANNEL = "logs:local"
 
 # --- REDIS SETTINGS ---
 REDIS_HOST = os.environ.get("REDIS_HOST", "192.168.0.103")
@@ -48,6 +50,8 @@ ROUTER_STATUS_KEY = "router:status"
 
 HISTORY_PREFIX = "job_history:"
 ACTIVE_JOB_KEY = "active_transcode_job"
+WIN_ACTIVE_JOB_KEY = "active_transcode_job:windows"
+PATH_INDEX_PREFIX = "path_index:"
 AD_REGISTRY_KEY = "ad_registry"
 AD_META_PREFIX = "ad_meta:"
 AD_PLAYS_PREFIX = "ad_plays:"
@@ -63,7 +67,7 @@ FFMPEG_BINARY = "ffmpeg"
 FFMPEG_CMD_TEMPLATE = [
     "ffmpeg", "-hide_banner", "-y",
     "-hwaccel", "vaapi", "-hwaccel_device", VAAPI_DEVICE, "-hwaccel_output_format", "vaapi",
-    "-threads", "0", "-probesize", "50M", "-analyzeduration", "50M",
+    "-threads", "4", "-probesize", "50M", "-analyzeduration", "50M",
     "-fflags", "+igndts", "-avoid_negative_ts", "make_zero",
     "-i", "{input_path}",
     "-filter_complex",
@@ -84,7 +88,7 @@ FFMPEG_CMD_TEMPLATE = [
     "-hls_segment_filename", "{output_dir}/stream_%v_%03d.ts",
     "-master_pl_name", "master.m3u8",
     "-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2 v:3,a:3",
-    "-max_muxing_queue_size", "9999",
+    "-max_muxing_queue_size", "1024",
     "{output_dir}/stream_%v.m3u8"
 ]
 
@@ -95,6 +99,35 @@ WEBHOOK_PORT = 6667
 # --- PERMISSIONS ---
 SERVICE_USER = "media"
 WEB_USER = "www-data"
+
+# --- UTILS ---
+def sanitize_path(path_segment):
+    import re
+    sanitized = re.sub(r'[^\w\s\-\(\).]', '', path_segment)
+    sanitized = sanitized.replace(' ', '_')
+    return sanitized
+
+def get_output_dir(job_type, input_path, job_id=None):
+    if job_type == 'ad':
+        return os.path.join(OUTPUT_BASE_ADS, job_id)
+        
+    base_source = SOURCE_BASE_MOVIES if job_type == 'movie' else SOURCE_BASE_TV
+    base_output = OUTPUT_BASE_MOVIES if job_type == 'movie' else OUTPUT_BASE_TV
+    
+    try:
+        rel_path = os.path.relpath(input_path, base_source)
+    except ValueError:
+        # If input_path is not under base_source, fallback to a safe folder
+        return os.path.join(base_output, "unknown", job_id or "unknown")
+        
+    path_parts = rel_path.split(os.sep)
+    sanitized_parts = [sanitize_path(p) for p in path_parts[:-1]]
+    
+    if job_type == 'tv':
+        filename = os.path.splitext(path_parts[-1])[0]
+        sanitized_parts.append(sanitize_path(filename))
+    
+    return os.path.join(base_output, *sanitized_parts)
 
 # --- VIDEO EXTENSIONS ---
 VIDEO_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.mov', '.m4v', '.ts')

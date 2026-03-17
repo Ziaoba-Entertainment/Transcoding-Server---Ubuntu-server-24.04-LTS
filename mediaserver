@@ -1,0 +1,234 @@
+# ==========================================================
+# LOGGING FORMAT
+# ==========================================================
+# Logging with Cloudflare Real IP support
+# Cloudflare passes the real visitor IP in the CF-Connecting-IP header.
+# This MUST be defined outside the server block (in the http context).
+log_format cloudflare '$http_cf_connecting_ip - $remote_user [$time_local] '
+                      '"$request" $status $body_bytes_sent '
+                      '"$http_referer" "$http_user_agent"';
+
+# ==========================================================
+# SERVER BLOCK A - Port 80 (Public Streaming Delivery)
+# ==========================================================
+# This block is the ONLY one exposed to the internet via Cloudflare Tunnel.
+# It uses a strict whitelist approach to prevent accidental exposure of admin panels.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name stream.ziaoba.com localhost;
+
+    access_log /var/log/nginx/streaming_access.log cloudflare;
+    error_log /var/log/nginx/streaming_error.log warn;
+
+    # Global HLS Optimization
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+
+    # ------------------------------------------------------
+    # WHITELISTED PATHS ONLY
+    # ------------------------------------------------------
+
+    # 1. HLS Playlists (Proxied to FastAPI on port 8083)
+    # Matches /playlist/movies/... and /playlist/tv/...
+    location ~ ^/playlist/(movies|tv)/ {
+        # OPTIONS Preflight Handling for HLS Players
+        if ($request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*' always;
+            add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Range' always;
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain; charset=utf-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
+
+        proxy_pass http://127.0.0.1:8083;
+        proxy_http_version 1.1;
+        
+        # Force headers for FastAPI to generate correct URLs (https://stream.ziaoba.com/segments/...)
+        proxy_set_header Host "stream.ziaoba.com";
+        proxy_set_header X-Forwarded-Host "stream.ziaoba.com";
+        proxy_set_header X-Forwarded-Proto "https";
+        proxy_set_header X-Real-IP $http_cf_connecting_ip;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        
+        # HLS Specifics
+        proxy_read_timeout 30s;
+        proxy_connect_timeout 5s;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        default_type application/vnd.apple.mpegurl;
+    }
+
+    # 2. Movie Segments (Static Files)
+    location /segments/hls/movies/ {
+        alias /srv/vod/hls/movies/;
+        types { video/mp2t ts; }
+        default_type video/mp2t;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Range" always;
+        sendfile on;
+        tcp_nopush on;
+        gzip off;
+    }
+
+    # 3. TV Segments (Static Files)
+    location /segments/hls/tv/ {
+        alias /srv/vod/hls/tv/;
+        types { video/mp2t ts; }
+        default_type video/mp2t;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Range" always;
+        sendfile on;
+        tcp_nopush on;
+        gzip off;
+    }
+
+    # 4. Ad Segments (Static Files)
+    location /segments/ads/ {
+        alias /srv/vod/ads/;
+        types { video/mp2t ts; }
+        default_type video/mp2t;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Range" always;
+        sendfile on;
+        tcp_nopush on;
+        gzip off;
+    }
+
+    # 5. Health Check (Proxied to FastAPI)
+    location = /health {
+        proxy_pass http://127.0.0.1:8083/health;
+        access_log off;
+    }
+
+    # ------------------------------------------------------
+    # STRICT DENY - Catch-all for Port 80
+    # ------------------------------------------------------
+    # Any path not explicitly whitelisted above will be silently dropped.
+    # This prevents exposure of admin panels or internal routes.
+    location / {
+        return 444; # Silent drop (no response)
+    }
+}
+
+# ==========================================================
+# SERVER BLOCK B - Port 8082 (Local Adserver Web UI)
+# ==========================================================
+# This block is ONLY accessible from the local network (192.168.0.0/24).
+server {
+    listen 8082;
+    server_name 192.168.0.103;
+
+    # Local Network Access Control
+    allow 192.168.0.0/24;
+    deny all;
+
+    location / {
+        proxy_pass http://127.0.0.1:8089; # Internal Adserver Web UI port
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Basic Auth for Ad Admin (optional, but recommended)
+        # auth_basic "Ad Server Admin";
+        # auth_basic_user_file /etc/nginx/.adserver_htpasswd;
+    }
+
+    # Custom Error Page for Denied Access
+    error_page 403 /403.html;
+    location = /403.html {
+        return 403 "Access Denied: Local Network Only (192.168.0.0/24)";
+    }
+}
+
+# ==========================================================
+# SERVER BLOCK C - Port 8081 (Local Transcoder Web UI)
+# ==========================================================
+# This block is ONLY accessible from the local network (192.168.0.0/24).
+server {
+    listen 8081;
+    server_name 192.168.0.103;
+
+    # Local Network Access Control
+    allow 192.168.0.0/24;
+    deny all;
+
+    # VOD Direct Access (Local Network Only)
+    location /vod/ {
+        alias /srv/vod/;
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Range' always;
+        types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t ts;
+        }
+        default_type application/vnd.apple.mpegurl;
+        
+        # Optimization for large file delivery
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+    }
+
+    # Ads Direct Access (Local Network Only)
+    location /ads/ {
+        alias /srv/vod/ads/;
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Range' always;
+        types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t ts;
+        }
+        default_type application/vnd.apple.mpegurl;
+        
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+    }
+
+    location / {
+        return 301 /transcoder/;
+    }
+
+    location /transcoder/ {
+        proxy_pass http://127.0.0.1:6666/; # Internal Transcoder Web UI port
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Transcoder specific settings
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+
+        # Handle EventSource (Logs) inside the prefix
+        location /transcoder/stream {
+            proxy_pass http://127.0.0.1:6666/stream;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 3600s;
+            chunked_transfer_encoding off;
+        }
+    }
+
+    # Custom Error Page for Denied Access
+    error_page 403 /403.html;
+    location = /403.html {
+        return 403 "Access Denied: Local Network Only (192.168.0.0/24)";
+    }
+}

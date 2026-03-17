@@ -61,7 +61,7 @@ class WinOutputHandler(FileSystemEventHandler):
             history_key = f"{config.HISTORY_PREFIX}{job_id}"
             r.hset(history_key, mapping={
                 "status": "completed",
-                "end_time": datetime.now().isoformat(),
+                "completed_at": datetime.now().isoformat(),
                 "progress": 100,
                 "worker": "windows"
             })
@@ -69,6 +69,16 @@ class WinOutputHandler(FileSystemEventHandler):
             if job_type == 'ad':
                 r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "status", "active")
                 r_ads.hset(f"{config.AD_META_PREFIX}{job_id}", "completed_at", datetime.now().isoformat())
+            
+            # Publish event to transcoder:events channel
+            event_payload = {
+                "event": "transcoding_completed",
+                "job_id": job_id,
+                "type": job_type,
+                "worker": "windows",
+                "timestamp": datetime.now().isoformat()
+            }
+            r.publish("transcoder:events", json.dumps(event_payload))
             
             logger.info(f"Successfully processed Windows output for job {job_id}")
             
