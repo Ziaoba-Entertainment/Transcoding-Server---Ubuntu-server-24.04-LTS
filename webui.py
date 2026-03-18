@@ -12,16 +12,13 @@ from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
+import requests
 import config
 import integration_utils
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20GB
 CORS(app, resources={r"/api/*": {"origins": "*"}})
-
-@app.errorhandler(RequestEntityTooLarge)
-def handle_file_too_large(e):
-    return jsonify({"error": "Upload exceeds 20GB limit. Please choose a smaller file."}), 413
 
 # Setup logging
 logging.basicConfig(
@@ -33,6 +30,96 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+@app.route('/api/ad-admin/test-impression', methods=['POST'])
+def test_ad_impression():
+    """Emit a synthetic impression for testing the live feed."""
+    try:
+        import time
+        msg = {
+            "ad_id": "test-ad-" + str(int(time.time())),
+            "ad_folder": "Synthetic Test Ad",
+            "advertiser_name": "Ziaoba Debugger",
+            "placement": "mid",
+            "content_path": "/srv/vod/hls/movies/demo/index.m3u8",
+            "session_id": "debug-session-" + str(int(time.time())),
+            "played_at": time.time() * 1000
+        }
+        
+        # Use the same redis connection logic as elsewhere
+        r = redis.Redis(
+            host=config.REDIS_HOST,
+            port=config.REDIS_PORT,
+            password=config.REDIS_PASSWORD,
+            decode_responses=True
+        )
+        # The ad server usually publishes to 'ad_impressions'
+        r.publish('ad_impressions', json.dumps(msg))
+        return jsonify({"status": "sent", "data": msg})
+    except Exception as e:
+        logger.error(f"Test Impression Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/ad-admin/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def ad_admin_proxy(path):
+    """Proxy requests to the Ad Admin backend."""
+    # Standardize path - ensure we don't have double /api
+    clean_path = path.lstrip('/')
+    if clean_path.startswith('api/'):
+        url = f"{config.AD_ADMIN_URL}/{clean_path}"
+    elif clean_path == 'health':
+        url = f"{config.AD_ADMIN_URL}/health"
+    else:
+        url = f"{config.AD_ADMIN_URL}/api/{clean_path}"
+    
+    # Forward query parameters
+    params = request.args.to_dict()
+    
+    # Forward headers (excluding Host)
+    headers = {key: value for (key, value) in request.headers if key.lower() != 'host'}
+    
+    try:
+        # Handle SSE streaming if requested
+        if 'stream' in clean_path or 'events' in clean_path:
+            def generate():
+                with requests.request(
+                    method=request.method,
+                    url=url,
+                    headers=headers,
+                    params=params,
+                    stream=True,
+                    timeout=None
+                ) as r:
+                    for line in r.iter_lines(decode_unicode=False):
+                        # Yield the line exactly as received plus a newline
+                        # requests.iter_lines strips the delimiter
+                        yield line + b'\n'
+            return Response(generate(), mimetype='text/event-stream')
+
+        resp = requests.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            data=request.get_data(),
+            params=params,
+            cookies=request.cookies,
+            allow_redirects=False,
+            timeout=15
+        )
+        
+        # Filter out hop-by-hop headers
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+        resp_headers = [(name, value) for (name, value) in resp.raw.headers.items()
+                   if name.lower() not in excluded_headers]
+        
+        return Response(resp.content, resp.status_code, resp_headers)
+    except Exception as e:
+        logger.error(f"Ad Admin Proxy Error: {e}")
+        return jsonify({"error": f"Failed to connect to Ad Admin: {str(e)}"}), 502
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_file_too_large(e):
+    return jsonify({"error": "Upload exceeds 20GB limit. Please choose a smaller file."}), 413
 
 @app.before_request
 def log_request_info():

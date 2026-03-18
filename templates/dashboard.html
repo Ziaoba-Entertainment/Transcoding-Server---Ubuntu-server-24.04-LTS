@@ -36,7 +36,18 @@
             <div class="navbar-nav ms-auto" id="nav-tabs" role="tablist">
                 <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#queue-tab" type="button" role="tab">Queue</button>
                 <button class="nav-link" data-bs-toggle="tab" data-bs-target="#completed-tab" type="button" role="tab">Completed</button>
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#ads-tab" type="button" role="tab">Ads</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#ads-tab" type="button" role="tab">Transcoder Ads</button>
+                <div class="nav-item dropdown">
+                    <button class="nav-link dropdown-toggle" type="button" id="adServerDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        Ad Server
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adServerDropdown">
+                        <li><button class="dropdown-item" data-bs-toggle="tab" data-bs-target="#ad-admin-ads-tab" type="button" role="tab" onclick="fetchAdAdminAds()">Ads Inventory</button></li>
+                        <li><button class="dropdown-item" data-bs-toggle="tab" data-bs-target="#ad-admin-metrics-tab" type="button" role="tab" onclick="fetchAdAdminMetrics()">Metrics</button></li>
+                        <li><button class="dropdown-item" data-bs-toggle="tab" data-bs-target="#ad-admin-activity-tab" type="button" role="tab" onclick="startAdAdminActivityPolling()">Activity</button></li>
+                        <li><button class="dropdown-item" data-bs-toggle="tab" data-bs-target="#ad-admin-settings-tab" type="button" role="tab" onclick="fetchAdAdminSettings()">Settings</button></li>
+                    </ul>
+                </div>
                 <button class="nav-link" data-bs-toggle="tab" data-bs-target="#system-tab" type="button" role="tab">System</button>
             </div>
         </div>
@@ -201,6 +212,175 @@
                         </thead>
                         <tbody id="ads-table-body"></tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- AD ADMIN ADS TAB -->
+        <div class="tab-pane fade" id="ad-admin-ads-tab" role="tabpanel">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">Ad Inventory</h5>
+                <div>
+                    <button class="btn btn-sm btn-success me-2" onclick="adAdminScan()"><i class="bi bi-search me-1"></i> Scan Filesystem</button>
+                    <button class="btn btn-sm btn-outline-dark" onclick="fetchAdAdminAds()"><i class="bi bi-arrow-clockwise me-1"></i> Refresh</button>
+                </div>
+            </div>
+            
+            <div class="filter-bar mb-3">
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <input type="text" id="ad-admin-search" class="form-control form-control-sm" placeholder="Search ads..." oninput="filterAdAdminAds()">
+                    </div>
+                    <div class="col-md-2">
+                        <select id="ad-admin-status-filter" class="form-select form-select-sm" onchange="filterAdAdminAds()">
+                            <option value="">All Status</option>
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select id="ad-admin-placement-filter" class="form-select form-select-sm" onchange="filterAdAdminAds()">
+                            <option value="">All Placements</option>
+                            <option value="pre">Pre-roll</option>
+                            <option value="mid">Mid-roll</option>
+                            <option value="post">Post-roll</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Status</th>
+                                <th>Ad ID</th>
+                                <th>Folder</th>
+                                <th>Advertiser/Campaign</th>
+                                <th>Priority</th>
+                                <th>Placements</th>
+                                <th>Plays</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ad-admin-ads-table-body">
+                            <tr><td colspan="8" class="text-center p-4">Loading ads...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- AD ADMIN METRICS TAB -->
+        <div class="tab-pane fade" id="ad-admin-metrics-tab" role="tabpanel">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">Performance Metrics</h5>
+                <div class="d-flex gap-2">
+                    <select id="metrics-preset" class="form-select form-select-sm" onchange="onMetricsPresetChange()">
+                        <option value="today">Today</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="7days" selected>Last 7 Days</option>
+                        <option value="month">This Month</option>
+                        <option value="lastmonth">Last Month</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                    <button class="btn btn-sm btn-primary" onclick="exportAdAdminMetrics()"><i class="bi bi-download me-1"></i> Export CSV</button>
+                </div>
+            </div>
+
+            <div id="metrics-summary-cards" class="row mb-4">
+                <!-- KPI cards injected here -->
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card p-3">
+                        <h6>Ad Performance</h6>
+                        <div id="metrics-ad-performance" class="table-responsive">
+                            <!-- Table injected here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card p-3">
+                        <h6>Placement Distribution</h6>
+                        <div id="metrics-placement-dist">
+                            <!-- Chart or table injected here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AD ADMIN ACTIVITY TAB -->
+        <div class="tab-pane fade" id="ad-admin-activity-tab" role="tabpanel">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">Live Impression Feed</h5>
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-primary" onclick="emitTestImpression()">
+                        <i class="bi bi-plus-circle me-1"></i>Test Impression
+                    </button>
+                    <button class="btn btn-sm btn-outline-dark" onclick="fetchAdAdminActivity()"><i class="bi bi-arrow-clockwise me-1"></i> Refresh</button>
+                </div>
+            </div>
+
+            <div class="card p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Time</th>
+                                <th>Ad / Advertiser</th>
+                                <th>Placement</th>
+                                <th>Content Path</th>
+                                <th>Session ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ad-admin-activity-table-body">
+                            <tr><td colspan="5" class="text-center p-4">Waiting for impressions...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- AD ADMIN SETTINGS TAB -->
+        <div class="tab-pane fade" id="ad-admin-settings-tab" role="tabpanel">
+            <div class="row justify-content-center">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-white py-3">
+                            <h6 class="mb-0">Global Ad Break Settings</h6>
+                        </div>
+                        <div class="card-body">
+                            <form id="ad-admin-settings-form" onsubmit="saveAdAdminSettings(event)">
+                                <div class="mb-3">
+                                    <label class="form-label">Mid-roll Interval (seconds)</label>
+                                    <input type="number" id="setting-mid-roll-interval" class="form-control" required min="60">
+                                    <div class="form-text">How often to trigger a mid-roll ad break.</div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">Pre-roll Count</label>
+                                        <input type="number" id="setting-pre-ad-count" class="form-control" required min="0" max="5">
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">Mid-roll Count</label>
+                                        <input type="number" id="setting-mid-ad-count" class="form-control" required min="0" max="5">
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">Post-roll Count</label>
+                                        <input type="number" id="setting-post-ad-count" class="form-control" required min="0" max="5">
+                                    </div>
+                                </div>
+                                <hr>
+                                <div class="d-flex justify-content-end">
+                                    <button type="submit" id="save-settings-btn" class="btn btn-primary">Save Settings</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -614,6 +794,359 @@
         fetchQueue();
     }
 
+    // --- AD ADMIN ---
+    const AD_ADMIN_API = "/transcoder/api/ad-admin";
+    let adAdminAds = [];
+    let adAdminActivitySSE = null;
+
+    async function apiFetch(url, options = {}) {
+        try {
+            const res = await fetch(url, options);
+            const contentType = res.headers.get("content-type") || "";
+            
+            if (!res.ok) {
+                let errorText = `HTTP ${res.status}`;
+                if (contentType.includes("application/json")) {
+                    const errData = await res.json();
+                    errorText = errData.error || errorText;
+                } else {
+                    const text = await res.text();
+                    errorText += ": " + text.substring(0, 100);
+                }
+                throw new Error(errorText);
+            }
+
+            if (!contentType.includes("application/json")) {
+                const text = await res.text();
+                throw new Error(`Expected JSON but got ${contentType}: ${text.substring(0, 100)}`);
+            }
+
+            return await res.json();
+        } catch (e) {
+            console.error(`API Fetch Error (${url}):`, e);
+            throw e;
+        }
+    }
+
+    async function fetchAdAdminAds() {
+        const tbody = document.getElementById('ad-admin-ads-table-body');
+        try {
+            // The proxy now handles the /api prefix centrally
+            const data = await apiFetch(`${AD_ADMIN_API}/ads`);
+            adAdminAds = data.ads || [];
+            renderAdAdminAds(adAdminAds);
+        } catch (e) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Error loading ads: ${e.message}</td></tr>`;
+        }
+    }
+
+    function renderAdAdminAds(ads) {
+        const tbody = document.getElementById('ad-admin-ads-table-body');
+        if (!ads || ads.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4">No ads found matching filters</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = ads.map(a => `
+            <tr>
+                <td>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" ${a.active ? 'checked' : ''} onchange="toggleAdAdminActive('${a.id}', this.checked)">
+                    </div>
+                </td>
+                <td class="small fw-bold">${a.id}</td>
+                <td class="small">${a.folder_name}</td>
+                <td>
+                    <div class="small fw-bold">${a.advertiser_name || 'N/A'}</div>
+                    <div class="text-muted smaller">${a.campaign_name || 'N/A'}</div>
+                </td>
+                <td>
+                    <select class="form-select form-select-sm" style="width: 70px" onchange="updateAdAdminPriority('${a.id}', this.value)">
+                        ${[1,2,3,4,5].map(p => `<option value="${p}" ${a.priority == p ? 'selected' : ''}>${p}</option>`).join('')}
+                    </select>
+                </td>
+                <td>
+                    <div class="d-flex gap-1">
+                        <span class="badge ${a.pre_roll ? 'bg-primary' : 'bg-light text-dark'} cursor-pointer" onclick="toggleAdAdminPlacement('${a.id}', 'pre', ${!a.pre_roll})">Pre</span>
+                        <span class="badge ${a.mid_roll ? 'bg-info' : 'bg-light text-dark'} cursor-pointer" onclick="toggleAdAdminPlacement('${a.id}', 'mid', ${!a.mid_roll})">Mid</span>
+                        <span class="badge ${a.post_roll ? 'bg-secondary' : 'bg-light text-dark'} cursor-pointer" onclick="toggleAdAdminPlacement('${a.id}', 'post', ${!a.post_roll})">Post</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="small">${a.play_count} / ${a.max_plays || '∞'}</div>
+                </td>
+                <td>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAdAdminAd('${a.id}')"><i class="bi bi-trash"></i></button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function filterAdAdminAds() {
+        const q = document.getElementById('ad-admin-search').value.toLowerCase();
+        const status = document.getElementById('ad-admin-status-filter').value;
+        const placement = document.getElementById('ad-admin-placement-filter').value;
+
+        const filtered = adAdminAds.filter(a => {
+            const matchesQ = !q || a.folder_name.toLowerCase().includes(q) || (a.advertiser_name && a.advertiser_name.toLowerCase().includes(q));
+            const matchesStatus = !status || (status === 'active' ? a.active : !a.active);
+            const matchesPlacement = !placement || (placement === 'pre' ? a.pre_roll : placement === 'mid' ? a.mid_roll : a.post_roll);
+            return matchesQ && matchesStatus && matchesPlacement;
+        });
+        renderAdAdminAds(filtered);
+    }
+
+    async function adAdminScan() {
+        if (!confirm("Scan filesystem for new ads?")) return;
+        try {
+            const data = await apiFetch(`${AD_ADMIN_API}/ads/scan`, { method: 'POST' });
+            alert(`Scan complete: ${data.added || 0} new ads found.`);
+            fetchAdAdminAds();
+        } catch (e) { alert("Scan failed: " + e.message); }
+    }
+
+    async function toggleAdAdminActive(id, active) {
+        try {
+            await apiFetch(`${AD_ADMIN_API}/ads/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ active })
+            });
+        } catch (e) { alert("Update failed: " + e.message); fetchAdAdminAds(); }
+    }
+
+    async function updateAdAdminPriority(id, priority) {
+        try {
+            await apiFetch(`${AD_ADMIN_API}/ads/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ priority: parseInt(priority) })
+            });
+        } catch (e) { alert("Update failed: " + e.message); fetchAdAdminAds(); }
+    }
+
+    async function toggleAdAdminPlacement(id, type, val) {
+        const payload = {};
+        payload[`${type}_roll`] = val;
+        try {
+            await apiFetch(`${AD_ADMIN_API}/ads/${id}`, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            fetchAdAdminAds();
+        } catch (e) { alert("Update failed: " + e.message); }
+    }
+
+    async function deleteAdAdminAd(id) {
+        if (!confirm("Soft-delete this ad? It will be deactivated and hidden.")) return;
+        try {
+            await apiFetch(`${AD_ADMIN_API}/ads/${id}`, { method: 'DELETE' });
+            fetchAdAdminAds();
+        } catch (e) { alert("Delete failed: " + e.message); }
+    }
+
+    // --- METRICS ---
+    async function fetchAdAdminMetrics() {
+        const preset = document.getElementById('metrics-preset').value;
+        const container = document.getElementById('metrics-summary-cards');
+        try {
+            const data = await apiFetch(`${AD_ADMIN_API}/metrics?preset=${preset}`);
+            
+            // Normalize data structure
+            const summary = data.summary || {};
+            const adsBreakdown = (data.breakdown && data.breakdown.ads) || data.ads || [];
+            const placementsBreakdown = (data.breakdown && data.breakdown.placements) || data.placements || {};
+
+            container.innerHTML = `
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <div class="text-muted small mb-1">Total Impressions</div>
+                        <h3 class="mb-0">${summary.total_impressions || 0}</h3>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <div class="text-muted small mb-1">Pre-roll</div>
+                        <h3 class="mb-0">${summary.pre_roll || 0}</h3>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <div class="text-muted small mb-1">Mid-roll</div>
+                        <h3 class="mb-0">${summary.mid_roll || 0}</h3>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <div class="text-muted small mb-1">Post-roll</div>
+                        <h3 class="mb-0">${summary.post_roll || 0}</h3>
+                    </div>
+                </div>
+            `;
+
+            if (adsBreakdown.length === 0) {
+                document.getElementById('metrics-ad-performance').innerHTML = '<div class="text-center p-4 text-muted">No data available</div>';
+            } else {
+                document.getElementById('metrics-ad-performance').innerHTML = `
+                    <table class="table table-sm table-borderless">
+                        <thead><tr><th>Ad</th><th>Impressions</th></tr></thead>
+                        <tbody>
+                            ${adsBreakdown.slice(0, 10).map(a => `
+                                <tr><td>${a.folder_name || a.ad_id}</td><td>${a.count || a.impressions || 0}</td></tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            if (Object.keys(placementsBreakdown).length === 0) {
+                document.getElementById('metrics-placement-dist').innerHTML = '<div class="text-center p-4 text-muted">No data available</div>';
+            } else {
+                const total = summary.total_impressions || 1;
+                document.getElementById('metrics-placement-dist').innerHTML = `
+                    <div class="d-flex flex-column gap-2 mt-2">
+                        ${Object.entries(placementsBreakdown).map(([p, count]) => `
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="text-capitalize">${p}</span>
+                                <span class="fw-bold">${count}</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-primary" style="width: ${(count / total * 100) || 0}%"></div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+
+        } catch (e) { 
+            container.innerHTML = `<div class="col-12 text-center text-danger">Error loading metrics: ${e.message}</div>`;
+        }
+    }
+
+    function onMetricsPresetChange() {
+        fetchAdAdminMetrics();
+    }
+
+    function exportAdAdminMetrics() {
+        const preset = document.getElementById('metrics-preset').value;
+        window.open(`${AD_ADMIN_API}/metrics/export?preset=${preset}`, '_blank');
+    }
+
+    // --- ACTIVITY ---
+    function startAdAdminActivityPolling() {
+        // Switch to SSE for real-time updates
+        if (adAdminActivitySSE) adAdminActivitySSE.close();
+        
+        const tbody = document.getElementById('ad-admin-activity-table-body');
+        
+        // Load recent first
+        fetchAdAdminActivity();
+
+        // Subscribe to SSE
+        adAdminActivitySSE = new EventSource(`${AD_ADMIN_API}/impressions/stream`);
+        
+        adAdminActivitySSE.onmessage = (e) => {
+            try {
+                const impression = JSON.parse(e.data);
+                if (impression) {
+                    addImpressionToTable(impression);
+                }
+            } catch (err) { console.error("SSE Parse Error:", err); }
+        };
+
+        adAdminActivitySSE.onerror = (e) => {
+            console.warn("SSE Connection lost, retrying...");
+        };
+    }
+
+    async function fetchAdAdminActivity() {
+        const tbody = document.getElementById('ad-admin-activity-table-body');
+        try {
+            const data = await apiFetch(`${AD_ADMIN_API}/impressions/recent`);
+            const impressions = data.impressions || (Array.isArray(data) ? data : []);
+            
+            if (impressions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center p-4">No recent activity</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = impressions.map(i => renderImpressionRow(i)).join('');
+        } catch (e) { console.error(e); }
+    }
+
+    function addImpressionToTable(i) {
+        const tbody = document.getElementById('ad-admin-activity-table-body');
+        // Remove "Waiting" or "No activity" message if present
+        if (tbody.rows.length === 1 && tbody.rows[0].cells.length === 1) {
+            tbody.innerHTML = '';
+        }
+        
+        const row = document.createElement('tr');
+        row.innerHTML = renderImpressionRow(i);
+        tbody.insertBefore(row, tbody.firstChild);
+        
+        // Limit to 50 rows
+        if (tbody.rows.length > 50) {
+            tbody.deleteRow(tbody.rows.length - 1);
+        }
+    }
+
+    function renderImpressionRow(i) {
+        return `
+            <td class="small text-muted">${new Date(i.played_at || Date.now()).toLocaleTimeString()}</td>
+            <td>
+                <div class="fw-bold">${i.ad_folder || i.ad_id}</div>
+                <div class="text-muted smaller">${i.advertiser_name || 'N/A'}</div>
+            </td>
+            <td><span class="badge bg-light text-dark border">${i.placement}</span></td>
+            <td class="small text-truncate" style="max-width: 200px" title="${i.content_path}">${i.content_path}</td>
+            <td class="small font-monospace">${(i.session_id || 'N/A').substring(0, 8)}...</td>
+        `;
+    }
+
+    async function emitTestImpression() {
+        try {
+            await fetch(`${AD_ADMIN_API}/test-impression`, { method: 'POST' });
+        } catch (e) { console.error(e); }
+    }
+
+    // --- SETTINGS ---
+    async function fetchAdAdminSettings() {
+        try {
+            const data = await apiFetch(`${AD_ADMIN_API}/settings`);
+            if (data) {
+                document.getElementById('setting-mid-roll-interval').value = data.mid_roll_interval || 300;
+                document.getElementById('setting-pre-ad-count').value = data.pre_ad_count || 1;
+                document.getElementById('setting-mid-ad-count').value = data.mid_ad_count || 1;
+                document.getElementById('setting-post-ad-count').value = data.post_ad_count || 1;
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    async function saveAdAdminSettings(e) {
+        e.preventDefault();
+        const btn = document.getElementById('save-settings-btn');
+        btn.disabled = true;
+        
+        const payload = {
+            mid_roll_interval: parseInt(document.getElementById('setting-mid-roll-interval').value),
+            pre_ad_count: parseInt(document.getElementById('setting-pre-ad-count').value),
+            mid_ad_count: parseInt(document.getElementById('setting-mid-ad-count').value),
+            post_ad_count: parseInt(document.getElementById('setting-post-ad-count').value)
+        };
+
+        try {
+            await apiFetch(`${AD_ADMIN_API}/settings`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            alert("Settings saved successfully");
+        } catch (e) { alert("Error: " + e.message); }
+        btn.disabled = false;
+    }
+
     // --- LOGS ---
     function initLogs() {
         const es = new EventSource('/transcoder/stream');
@@ -672,6 +1205,17 @@
     setInterval(fetchQueue, 5000);
     setInterval(fetchSystem, 10000);
     setInterval(fetchAds, 60000);
+
+    // Tab listeners for polling cleanup
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
+        tab.addEventListener('shown.bs.tab', (e) => {
+            const target = e.target.getAttribute('data-bs-target');
+            if (target !== '#ad-admin-activity-tab' && adAdminActivitySSE) {
+                adAdminActivitySSE.close();
+                adAdminActivitySSE = null;
+            }
+        });
+    });
     
     // Initial load
     window.onload = () => {

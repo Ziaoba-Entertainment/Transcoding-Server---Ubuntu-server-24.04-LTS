@@ -114,7 +114,7 @@ FFMPEG_CMD_TEMPLATE = [
 # --- WEB SETTINGS ---
 WEBUI_PORT = get_env_int("WEBUI_PORT", 6666)
 WEBHOOK_PORT = get_env_int("WEBHOOK_PORT", 6667)
-AD_ADMIN_URL = os.environ.get("AD_ADMIN_URL", "http://localhost:8089")
+AD_ADMIN_URL = os.environ.get("AD_ADMIN_URL", "http://127.0.0.1:8089")
 ADSERVER_INTERNAL_PORT = get_env_int("ADSERVER_INTERNAL_PORT", 8083)
 
 # --- PUBLIC ACCESS ---
